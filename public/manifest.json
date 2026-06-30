@@ -1,0 +1,17 @@
+{
+  "name": "Agenda SM",
+  "short_name": "Agenda SM",
+  "description": "Agenda privada de SM Soluciones para citas, disponibilidad y seguimiento.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F7FAFC",
+  "theme_color": "#104080",
+  "icons": [
+    {
+      "src": "/logo-sm-soluciones.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
