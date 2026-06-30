@@ -7,9 +7,9 @@ Google Calendar no es la fuente oficial de agenda. La fuente principal es Supaba
 ## Estado Actual Verificado
 
 - Estado local: la app corre en desarrollo en `http://127.0.0.1:3000`.
-- Vercel: no esta conectado todavia. Evidencia local: no existe carpeta `.vercel` dentro de `agenda-sm`.
-- Variables reales: no existe `.env.local` en `agenda-sm`; solo existe `.env.example`.
-- Build: `pnpm build` compilo correctamente antes de agregar el panel admin; despues de cambios vuelve a requerir build de verificacion.
+- Vercel: la app puede estar desplegada aunque este checkout local no tenga carpeta `.vercel`. Las variables productivas deben vivir en el panel de Vercel, no en el codigo.
+- Variables locales: no existe `.env.local` en este checkout de `agenda-sm`; solo existe `.env.example`.
+- Build: ejecutar `pnpm build` antes de desplegar.
 
 ## Stack
 
@@ -17,7 +17,8 @@ Google Calendar no es la fuente oficial de agenda. La fuente principal es Supaba
 - Supabase Auth, Postgres, Admin API, RLS y Realtime-ready
 - FullCalendar
 - Resend para emails de notificacion
-- Supabase `inviteUserByEmail` para invitaciones de usuarios
+- Supabase Admin API `createUser` para alta de usuarios sin email automatico
+- Resend para invitaciones por email separadas del alta
 - Google Calendar Free/Busy API
 - Vercel
 - PWA instalable
@@ -75,7 +76,10 @@ Ruta:
 Funciones implementadas:
 
 - Crear usuarios desde la app usando Supabase Admin API en servidor.
-- Invitar usuarios con `supabase.auth.admin.inviteUserByEmail`.
+- Nuevo usuario usa `supabase.auth.admin.createUser` con `email_confirm: true`.
+- Nuevo usuario no envia email automatico y no llama `inviteUserByEmail`.
+- Enviar invitacion por email es una accion separada usando Resend.
+- No se usa recuperacion de contrasena de Supabase para invitaciones, porque la configuracion global compartida puede redirigir a otros proyectos.
 - Capturar nombre completo, email principal, emails secundarios, rol, PIN temporal, color, horario laboral y estado activo/inactivo.
 - Selector visual de color con `input[type=color]`.
 - Tabla con nombre, email, rol, color, estado, Google Calendar conectado/no conectado, ultimo acceso y acciones.
@@ -94,7 +98,7 @@ Endpoints:
 - `POST /api/admin/users/:id/reset-pin`
 - `POST /api/admin/users/:id/invite`
 
-El PIN temporal se guarda como hash + salt en `user_pins`. No debe ser la seguridad permanente. Despues del primer acceso, el usuario puede cambiar su contrasena en:
+El PIN temporal se usa como password inicial en Supabase Auth y tambien se guarda como hash + salt en `user_pins` para auditoria/activacion. No debe ser la seguridad permanente. Despues del primer acceso, el usuario puede cambiar su contrasena en:
 
 ```text
 /reset-password
@@ -156,7 +160,7 @@ pnpm install
 
 6. Configura el dominio `https://agenda.smsoluciones.com`.
 
-Evidencia actual: este workspace no tiene `.vercel`, por lo que no hay enlace local de proyecto Vercel ni variables sincronizadas.
+Evidencia local: este workspace no tiene `.vercel`, por lo que desde esta maquina no hay enlace local de proyecto Vercel ni variables sincronizadas. En produccion, confirma en Vercel que existan `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_APP_URL`, `RESEND_API_KEY` y `EMAIL_FROM`.
 
 ## Google Calendar Free/Busy
 
@@ -198,8 +202,9 @@ POST /api/notifications/email
 Estado actual:
 
 - API integrada a nivel de codigo con paquete `resend`.
-- Sin `RESEND_API_KEY` ni `EMAIL_FROM` en este workspace.
-- Si faltan variables, responde advertencia y no rompe el flujo.
+- Sin `RESEND_API_KEY` ni `EMAIL_FROM` en este checkout local.
+- Si faltan variables, `POST /api/admin/users/:id/invite` responde: `Resend no configurado; usuario creado sin envío de invitación`.
+- La falta de Resend no bloquea el alta de usuarios.
 
 Para produccion:
 

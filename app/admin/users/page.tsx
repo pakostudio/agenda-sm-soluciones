@@ -52,6 +52,7 @@ export default function AdminUsersPage() {
   const [message, setMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isRealApi, setIsRealApi] = useState(false);
+  const [accessDenied, setAccessDenied] = useState(false);
 
   const selectedUser = useMemo(() => users.find((user) => user.id === form.id), [form.id, users]);
 
@@ -76,6 +77,25 @@ export default function AdminUsersPage() {
         setMessage("Modo local: agrega variables Supabase y entra como Admin para operar con la Admin API.");
         return;
       }
+
+      const { data: sessionData } = await supabase!.auth.getSession();
+      const userId = sessionData.session?.user.id;
+      if (!userId) {
+        setAccessDenied(true);
+        setMessage("Acceso denegado: inicia sesion como Admin.");
+        return;
+      }
+      const { data: profile } = await supabase!
+        .from("profiles")
+        .select("role, active")
+        .eq("id", userId)
+        .single();
+      if (profile?.role !== "admin" || !profile.active) {
+        setAccessDenied(true);
+        setMessage("Acceso denegado: solo usuarios Admin activos pueden entrar al Panel Admin.");
+        return;
+      }
+      setAccessDenied(false);
 
       const response = await fetch("/api/admin/users", { headers });
       const data = await response.json();
@@ -142,7 +162,7 @@ export default function AdminUsersPage() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "No se pudo guardar usuario.");
-      setMessage(data.temporary_pin ? `Usuario creado. PIN temporal: ${data.temporary_pin}` : "Usuario actualizado.");
+      setMessage(data.temporary_pin ? `${data.message || "Usuario guardado sin envio de email."} PIN temporal: ${data.temporary_pin}` : "Usuario actualizado.");
       setForm(emptyForm());
       await loadUsers();
     } catch (error) {
@@ -227,7 +247,11 @@ export default function AdminUsersPage() {
     }
     const response = await fetch(`/api/admin/users/${target.id}/invite`, { method: "POST", headers });
     const data = await response.json();
-    setMessage(response.ok ? `Invitacion enviada a ${target.primary_email}.` : data.error);
+    if (!response.ok) {
+      setMessage(data.error || "No se pudo enviar invitacion.");
+      return;
+    }
+    setMessage(data.sent ? `Invitacion enviada a ${target.primary_email}.` : data.warning || "Resend no configurado; usuario creado sin envío de invitación");
   };
 
   return (
@@ -245,6 +269,17 @@ export default function AdminUsersPage() {
           <button className="btn" onClick={loadUsers}><RefreshCw size={16} /> Actualizar</button>
         </div>
       </header>
+
+      {accessDenied ? (
+        <section className="card">
+          <div className="section-title">
+            <h2>Acceso denegado</h2>
+            <span className="badge cancelada">Admin requerido</span>
+          </div>
+          <p className="muted">{message}</p>
+        </section>
+      ) : (
+        <>
 
       <section className="card">
         <div className="section-title">
@@ -269,6 +304,7 @@ export default function AdminUsersPage() {
           {form.id && <button className="btn" onClick={() => setForm(emptyForm())}>Limpiar</button>}
         </div>
         {message && <p className="muted">{message}</p>}
+        <p className="muted">Nuevo usuario crea el acceso en Supabase Auth con email confirmado y no envia correo automatico.</p>
       </section>
 
       <section className="card table-scroll">
@@ -312,6 +348,8 @@ export default function AdminUsersPage() {
           </tbody>
         </table>
       </section>
+        </>
+      )}
     </main>
   );
 }

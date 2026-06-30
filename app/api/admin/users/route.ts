@@ -17,7 +17,6 @@ type UserPayload = {
     end_time: string;
     is_active: boolean;
   }[];
-  send_invite?: boolean;
 };
 
 const defaultWorkingHours = () =>
@@ -69,20 +68,68 @@ export async function POST(request: Request) {
 
   const pin = body.pin || generatePin();
   const { salt, hash } = hashPin(pin);
-  const invite = await guard.service.auth.admin.inviteUserByEmail(body.primary_email, {
-    data: {
-      full_name: body.full_name,
-      role: body.role,
-      must_change_password: true
-    },
-    redirectTo: `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/reset-password`
-  });
 
-  if (invite.error || !invite.data.user) {
-    return NextResponse.json({ error: invite.error?.message || "Could not invite user." }, { status: 500 });
+  const existingUsers = await guard.service.auth.admin.listUsers();
+  const existingUser = existingUsers.data?.users.find((user) => user.email?.toLowerCase() === body.primary_email.toLowerCase());
+  let userId = existingUser?.id;
+
+  if (userId) {
+    const { data: existingProfile } = await guard.service
+      .from("profiles")
+      .select("id")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (!existingProfile) {
+      return NextResponse.json(
+        {
+          error:
+            "El email ya existe en Supabase Auth pero no tiene perfil de Agenda SM. No se modifico para proteger otros proyectos del Supabase compartido."
+        },
+        { status: 409 }
+      );
+    }
+
+    const authUpdate = await guard.service.auth.admin.updateUserById(userId, {
+      password: pin,
+      email_confirm: true,
+      user_metadata: {
+        full_name: body.full_name,
+        role: body.role,
+        source_app: "agenda-sm",
+        must_change_password: true
+      },
+      app_metadata: {
+        source_app: "agenda-sm"
+      }
+    });
+
+    if (authUpdate.error) {
+      return NextResponse.json({ error: authUpdate.error.message }, { status: 500 });
+    }
+  } else {
+    const created = await guard.service.auth.admin.createUser({
+      email: body.primary_email,
+      password: pin,
+      email_confirm: true,
+      user_metadata: {
+        full_name: body.full_name,
+        role: body.role,
+        source_app: "agenda-sm",
+        must_change_password: true
+      },
+      app_metadata: {
+        source_app: "agenda-sm"
+      }
+    });
+
+    if (created.error || !created.data.user) {
+      return NextResponse.json({ error: created.error?.message || "Could not create user." }, { status: 500 });
+    }
+
+    userId = created.data.user.id;
   }
 
-  const userId = invite.data.user.id;
   const { error: profileError } = await guard.service.from("profiles").upsert({
     id: userId,
     full_name: body.full_name,
@@ -111,5 +158,12 @@ export async function POST(request: Request) {
   await guard.service.from("working_hours").delete().eq("user_id", userId);
   await guard.service.from("working_hours").insert((body.working_hours?.length ? body.working_hours : defaultWorkingHours()).map((item) => ({ ...item, user_id: userId })));
 
-  return NextResponse.json({ user_id: userId, temporary_pin: pin });
+  return NextResponse.json({
+    user_id: userId,
+    temporary_pin: pin,
+    email_sent: false,
+    message: existingUser
+      ? "Usuario existente actualizado en Agenda SM sin envio de email automatico."
+      : "Usuario creado con email confirmado sin envio de email automatico."
+  });
 }
