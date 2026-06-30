@@ -19,6 +19,10 @@ type UserPayload = {
   }[];
 };
 
+const validRoles: Role[] = ["admin", "member", "viewer"];
+const normalizeEmail = (email: string) => email.trim().toLowerCase();
+const isEmail = (email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+
 const defaultWorkingHours = () =>
   [1, 2, 3, 4, 5].map((day) => ({
     day_of_week: day,
@@ -61,35 +65,32 @@ export async function POST(request: Request) {
   const guard = await requireActiveAdmin(request);
   if ("error" in guard) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
-  const body = (await request.json()) as UserPayload;
+  const rawBody = (await request.json()) as UserPayload;
+  const body = {
+    ...rawBody,
+    full_name: rawBody.full_name?.trim(),
+    primary_email: normalizeEmail(rawBody.primary_email || ""),
+    secondary_emails: (rawBody.secondary_emails || []).map(normalizeEmail).filter(Boolean)
+  };
+
   if (!body.full_name || !body.primary_email || !body.role || !body.color) {
     return NextResponse.json({ error: "full_name, primary_email, role and color are required." }, { status: 400 });
+  }
+  if (!validRoles.includes(body.role) || !isEmail(body.primary_email) || body.secondary_emails.some((email) => !isEmail(email))) {
+    return NextResponse.json({ error: "Role or email format is invalid." }, { status: 400 });
   }
 
   const pin = body.pin || generatePin();
   const { salt, hash } = hashPin(pin);
 
-  const existingUsers = await guard.service.auth.admin.listUsers();
-  const existingUser = existingUsers.data?.users.find((user) => user.email?.toLowerCase() === body.primary_email.toLowerCase());
-  let userId = existingUser?.id;
+  const existingProfileByEmail = await guard.service
+    .from("profiles")
+    .select("id")
+    .eq("primary_email", body.primary_email)
+    .maybeSingle();
+  let userId = existingProfileByEmail.data?.id;
 
   if (userId) {
-    const { data: existingProfile } = await guard.service
-      .from("profiles")
-      .select("id")
-      .eq("id", userId)
-      .maybeSingle();
-
-    if (!existingProfile) {
-      return NextResponse.json(
-        {
-          error:
-            "El email ya existe en Supabase Auth pero no tiene perfil de Agenda SM. No se modifico para proteger otros proyectos del Supabase compartido."
-        },
-        { status: 409 }
-      );
-    }
-
     const authUpdate = await guard.service.auth.admin.updateUserById(userId, {
       password: pin,
       email_confirm: true,
@@ -98,9 +99,6 @@ export async function POST(request: Request) {
         role: body.role,
         source_app: "agenda-sm",
         must_change_password: true
-      },
-      app_metadata: {
-        source_app: "agenda-sm"
       }
     });
 
@@ -124,7 +122,16 @@ export async function POST(request: Request) {
     });
 
     if (created.error || !created.data.user) {
-      return NextResponse.json({ error: created.error?.message || "Could not create user." }, { status: 500 });
+      const message = created.error?.message || "Could not create user.";
+      const isExistingAuthUser = /already|registered|exists|duplicate/i.test(message);
+      return NextResponse.json(
+        {
+          error: isExistingAuthUser
+            ? "El email ya existe en Supabase Auth pero no tiene perfil de Agenda SM. No se modifico para proteger otros proyectos del Supabase compartido."
+            : message
+        },
+        { status: isExistingAuthUser ? 409 : 500 }
+      );
     }
 
     userId = created.data.user.id;
@@ -144,7 +151,7 @@ export async function POST(request: Request) {
   await guard.service.from("user_emails").delete().eq("user_id", userId);
   await guard.service.from("user_emails").insert([
     { user_id: userId, email: body.primary_email, type: "primary", is_primary: true, verified: true },
-    ...(body.secondary_emails || []).filter(Boolean).map((email) => ({ user_id: userId, email, type: "secondary", is_primary: false }))
+    ...body.secondary_emails.map((email) => ({ user_id: userId, email, type: "secondary", is_primary: false }))
   ]);
 
   await guard.service.from("user_pins").insert({
@@ -162,7 +169,7 @@ export async function POST(request: Request) {
     user_id: userId,
     temporary_pin: pin,
     email_sent: false,
-    message: existingUser
+    message: existingProfileByEmail.data
       ? "Usuario existente actualizado en Agenda SM sin envio de email automatico."
       : "Usuario creado con email confirmado sin envio de email automatico."
   });

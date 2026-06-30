@@ -17,12 +17,41 @@ type UpdatePayload = {
   }[];
 };
 
+const validRoles: Role[] = ["admin", "member", "viewer"];
+const normalizeEmail = (email: string) => email.trim().toLowerCase();
+const isEmail = (email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const guard = await requireActiveAdmin(request);
   if ("error" in guard) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
-  const body = (await request.json()) as UpdatePayload;
+  const rawBody = (await request.json()) as UpdatePayload;
   const { id } = await params;
+  const { data: existingProfile, error: existingProfileError } = await guard.service
+    .from("profiles")
+    .select("id, primary_email")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (existingProfileError) return NextResponse.json({ error: existingProfileError.message }, { status: 500 });
+  if (!existingProfile) {
+    return NextResponse.json({ error: "Agenda SM user profile not found. No shared Supabase Auth user was modified." }, { status: 404 });
+  }
+
+  const body = {
+    ...rawBody,
+    full_name: rawBody.full_name?.trim(),
+    primary_email: rawBody.primary_email ? normalizeEmail(rawBody.primary_email) : undefined,
+    secondary_emails: rawBody.secondary_emails?.map(normalizeEmail).filter(Boolean)
+  };
+
+  if (body.role !== undefined && !validRoles.includes(body.role)) {
+    return NextResponse.json({ error: "Role is invalid." }, { status: 400 });
+  }
+  if ((body.primary_email && !isEmail(body.primary_email)) || body.secondary_emails?.some((email) => !isEmail(email))) {
+    return NextResponse.json({ error: "Email format is invalid." }, { status: 400 });
+  }
+
   const profilePatch = {
     ...(body.full_name !== undefined ? { full_name: body.full_name } : {}),
     ...(body.primary_email !== undefined ? { primary_email: body.primary_email } : {}),
@@ -45,8 +74,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     const { data: profile } = await guard.service.from("profiles").select("primary_email").eq("id", id).single();
     await guard.service.from("user_emails").delete().eq("user_id", id);
     await guard.service.from("user_emails").insert([
-      { user_id: id, email: profile?.primary_email || body.primary_email, type: "primary", is_primary: true, verified: true },
-      ...(body.secondary_emails || []).filter(Boolean).map((email) => ({ user_id: id, email, type: "secondary", is_primary: false }))
+      { user_id: id, email: profile?.primary_email || body.primary_email || existingProfile.primary_email, type: "primary", is_primary: true, verified: true },
+      ...(body.secondary_emails || []).map((email) => ({ user_id: id, email, type: "secondary", is_primary: false }))
     ]);
   }
 

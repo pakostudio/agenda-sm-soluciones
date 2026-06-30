@@ -229,10 +229,9 @@ alter table public.notification_preferences enable row level security;
 
 create policy "profiles read admin or own" on public.profiles for select using (public.is_admin() or id = auth.uid());
 create policy "profiles admin write" on public.profiles for all using (public.is_admin()) with check (public.is_admin());
-create policy "profiles update own" on public.profiles for update using (id = auth.uid()) with check (id = auth.uid());
 
 create policy "own emails" on public.user_emails for select using (user_id = auth.uid() or public.is_admin());
-create policy "manage emails admin or own" on public.user_emails for all using (public.is_admin() or user_id = auth.uid()) with check (public.is_admin() or user_id = auth.uid());
+create policy "manage emails admin only" on public.user_emails for all using (public.is_admin()) with check (public.is_admin());
 
 create policy "user pins admin only" on public.user_pins for all using (public.is_admin()) with check (public.is_admin());
 
@@ -250,7 +249,7 @@ create policy "read appointments visible" on public.appointments for select usin
 );
 create policy "insert appointments admin member" on public.appointments for insert with check (
   public.is_admin()
-  or exists (select 1 from public.profiles p where p.id = auth.uid() and p.role = 'member')
+  or exists (select 1 from public.profiles p where p.id = auth.uid() and p.role = 'member' and p.active = true)
 );
 create policy "update appointments owner admin" on public.appointments for update using (
   public.is_admin() or responsible_user_id = auth.uid()
@@ -265,7 +264,7 @@ create policy "read appointment history" on public.appointment_history for selec
 create policy "insert appointment history" on public.appointment_history for insert with check (public.can_read_appointment(appointment_id));
 
 create policy "read working hours admin or own" on public.working_hours for select using (public.is_admin() or user_id = auth.uid());
-create policy "write working hours admin own" on public.working_hours for all using (public.is_admin() or user_id = auth.uid()) with check (public.is_admin() or user_id = auth.uid());
+create policy "write working hours admin only" on public.working_hours for all using (public.is_admin()) with check (public.is_admin());
 
 create policy "read time blocks own team" on public.time_blocks for select using (auth.uid() is not null);
 create policy "write time blocks own" on public.time_blocks for all using (public.is_admin() or user_id = auth.uid()) with check (public.is_admin() or user_id = auth.uid());

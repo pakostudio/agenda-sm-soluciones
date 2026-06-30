@@ -7,6 +7,17 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   if ("error" in guard) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const { id } = await params;
+  const { data: existingProfile, error: existingProfileError } = await guard.service
+    .from("profiles")
+    .select("id")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (existingProfileError) return NextResponse.json({ error: existingProfileError.message }, { status: 500 });
+  if (!existingProfile) {
+    return NextResponse.json({ error: "Agenda SM user profile not found. No shared Supabase Auth user was modified." }, { status: 404 });
+  }
+
   const pin = generatePin();
   const { salt, hash } = hashPin(pin);
 
