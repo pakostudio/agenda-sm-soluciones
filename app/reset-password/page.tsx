@@ -3,14 +3,15 @@
 import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { supabase } from "@/lib/supabase";
+import { getSupabaseBrowserClient } from "@/lib/supabase";
 
 export default function ResetPasswordPage() {
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState("");
 
   const updatePassword = async () => {
-    if (!supabase) {
+    const client = await getSupabaseBrowserClient();
+    if (!client) {
       setMessage("Configura Supabase para cambiar contrasena.");
       return;
     }
@@ -19,7 +20,7 @@ export default function ResetPasswordPage() {
       return;
     }
 
-    const { error } = await supabase.auth.updateUser({ password });
+    const { error } = await client.auth.updateUser({ password });
     setMessage(error ? error.message : "Contrasena actualizada. Ya puedes entrar a Agenda SM.");
   };
 

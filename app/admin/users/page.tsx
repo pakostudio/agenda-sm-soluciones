@@ -5,7 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { CheckCircle2, Mail, Plus, RefreshCw, Shield, UserCog, XCircle } from "lucide-react";
 import { demoProfiles, demoWorkingHours } from "@/lib/demo-data";
-import { isSupabaseConfigured, supabase } from "@/lib/supabase";
+import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase";
 import type { AdminUser, Role } from "@/lib/types";
 
 type UserForm = {
@@ -47,7 +47,7 @@ const generatePin = () => String(Math.floor(100000 + Math.random() * 900000));
 const formatDate = (value?: string | null) => value ? new Intl.DateTimeFormat("es-MX", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)) : "Sin acceso";
 
 export default function AdminUsersPage() {
-  const [users, setUsers] = useState<AdminUser[]>(demoUsers);
+  const [users, setUsers] = useState<AdminUser[]>([]);
   const [form, setForm] = useState<UserForm>(emptyForm());
   const [message, setMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -61,8 +61,9 @@ export default function AdminUsersPage() {
   }, []);
 
   const authHeaders = async () => {
-    if (!supabase) return null;
-    const { data } = await supabase.auth.getSession();
+    const client = await getSupabaseBrowserClient();
+    if (!client) return null;
+    const { data } = await client.auth.getSession();
     const token = data.session?.access_token;
     return token ? { Authorization: `Bearer ${token}` } : null;
   };
@@ -72,20 +73,28 @@ export default function AdminUsersPage() {
     setMessage("");
     try {
       const headers = await authHeaders();
-      if (!isSupabaseConfigured || !headers) {
+      const client = await getSupabaseBrowserClient();
+      if (!client || !isSupabaseConfigured) {
         setIsRealApi(false);
+        setUsers(demoUsers);
         setMessage("Modo local: agrega variables Supabase y entra como Admin para operar con la Admin API.");
         return;
       }
+      if (!headers) {
+        setIsRealApi(false);
+        setUsers([]);
+        setMessage("Inicia sesion como Admin para operar con la Admin API.");
+        return;
+      }
 
-      const { data: sessionData } = await supabase!.auth.getSession();
+      const { data: sessionData } = await client.auth.getSession();
       const userId = sessionData.session?.user.id;
       if (!userId) {
         setAccessDenied(true);
         setMessage("Acceso denegado: inicia sesion como Admin.");
         return;
       }
-      const { data: profile } = await supabase!
+      const { data: profile } = await client
         .from("profiles")
         .select("role, active")
         .eq("id", userId)
@@ -133,7 +142,8 @@ export default function AdminUsersPage() {
 
     try {
       const headers = await authHeaders();
-      if (!isSupabaseConfigured || !headers) {
+      const client = await getSupabaseBrowserClient();
+      if (!client || !isSupabaseConfigured) {
         const localUser: AdminUser = {
           id: form.id || `local-${crypto.randomUUID()}`,
           full_name: payload.full_name,
@@ -151,6 +161,10 @@ export default function AdminUsersPage() {
         setUsers((current) => form.id ? current.map((item) => item.id === form.id ? localUser : item) : [localUser, ...current]);
         setMessage(`Usuario creado correctamente. PIN temporal: ${payload.pin}`);
         setForm(emptyForm());
+        return;
+      }
+      if (!headers) {
+        setMessage("Sesion requerida para crear usuarios reales.");
         return;
       }
 
@@ -205,9 +219,14 @@ export default function AdminUsersPage() {
     };
 
     const headers = await authHeaders();
-    if (!isSupabaseConfigured || !headers) {
+    const client = await getSupabaseBrowserClient();
+    if (!client || !isSupabaseConfigured) {
       setUsers((current) => current.map((item) => item.id === user.id ? { ...item, ...payload } : item));
       setMessage(`Usuario ${payload.active ? "activado" : "desactivado"} localmente.`);
+      return;
+    }
+    if (!headers) {
+      setMessage("Sesion requerida para editar usuarios reales.");
       return;
     }
 
@@ -223,9 +242,14 @@ export default function AdminUsersPage() {
 
   const resetPin = async (user: AdminUser) => {
     const headers = await authHeaders();
-    if (!isSupabaseConfigured || !headers) {
+    const client = await getSupabaseBrowserClient();
+    if (!client || !isSupabaseConfigured) {
       const pin = generatePin();
       setMessage(`PIN temporal local para ${user.full_name}: ${pin}`);
+      return;
+    }
+    if (!headers) {
+      setMessage("Sesion requerida para resetear PIN.");
       return;
     }
     const response = await fetch(`/api/admin/users/${user.id}/reset-pin`, { method: "POST", headers });
@@ -241,8 +265,13 @@ export default function AdminUsersPage() {
       return;
     }
     const headers = await authHeaders();
-    if (!isSupabaseConfigured || !headers) {
+    const client = await getSupabaseBrowserClient();
+    if (!client || !isSupabaseConfigured) {
       setMessage(`Invitacion preparada para ${target.primary_email}. Configura Supabase/Resend para enviarla.`);
+      return;
+    }
+    if (!headers) {
+      setMessage("Sesion requerida para enviar invitacion.");
       return;
     }
     const response = await fetch(`/api/admin/users/${target.id}/invite`, { method: "POST", headers });
