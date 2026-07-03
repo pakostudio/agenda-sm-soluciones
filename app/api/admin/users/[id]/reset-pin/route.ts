@@ -32,11 +32,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  await guard.service.from("profiles").update({ must_change_password: true }).eq("id", id);
+  await guard.service.from("profiles").update({ must_change_password: false }).eq("id", id);
   const authUpdate = await guard.service.auth.admin.updateUserById(id, {
     password: pin,
     user_metadata: {
-      must_change_password: true
+      must_change_password: false
     }
   });
 

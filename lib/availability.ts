@@ -1,4 +1,4 @@
-import type { Appointment, AvailabilitySlot, TimeBlock, WorkingHour } from "./types";
+import type { Appointment, AvailabilitySlot, GoogleAvailability, TimeBlock, WorkingHour } from "./types";
 
 type Input = {
   participantIds: string[];
@@ -10,6 +10,7 @@ type Input = {
   appointments: Appointment[];
   workingHours: WorkingHour[];
   blocks: TimeBlock[];
+  googleAvailability?: GoogleAvailability;
   stepMinutes?: number;
 };
 
@@ -32,17 +33,20 @@ const isInsideWorkingHours = (userId: string, start: Date, end: Date, hours: Wor
   return start >= startBoundary && end <= endBoundary;
 };
 
-const userIsBusy = (userId: string, start: Date, end: Date, appointments: Appointment[], blocks: TimeBlock[]) => {
+const userIsBusyAgenda = (userId: string, start: Date, end: Date, appointments: Appointment[], blocks: TimeBlock[]) => {
   const busyAppointments = appointments.filter((appointment) => {
     if (appointment.status === "cancelada" || appointment.status === "realizada") return false;
     return appointment.responsible_user_id === userId || appointment.participant_ids.includes(userId);
   });
 
-  const busyBlocks = blocks.filter((block) => block.user_id === userId);
+  const busyBlocks = blocks.filter((block) => block.user_id === userId && block.source === "internal");
 
   return busyAppointments.some((appointment) => overlaps(start, end, new Date(appointment.start_at), new Date(appointment.end_at))) ||
     busyBlocks.some((block) => overlaps(start, end, new Date(block.start_at), new Date(block.end_at)));
 };
+
+const userIsBusyGoogle = (userId: string, start: Date, end: Date, googleAvailability?: GoogleAvailability) =>
+  Boolean(googleAvailability?.[userId]?.busy.some((item) => overlaps(start, end, new Date(item.start), new Date(item.end))));
 
 export function findAvailableSlots(input: Input): AvailabilitySlot[] {
   const step = input.stepMinutes || 30;
@@ -62,14 +66,25 @@ export function findAvailableSlots(input: Input): AvailabilitySlot[] {
       for (const userId of input.participantIds) {
         const inHours = isInsideWorkingHours(userId, slot, slotEnd, input.workingHours, input.workdayStart, input.workdayEnd);
         if (!inHours) {
-          participants[userId] = "Sin horario";
+          participants[userId] = "Fuera de horario laboral";
           continue;
         }
 
-        participants[userId] = userIsBusy(userId, slot, slotEnd, input.appointments, input.blocks) ? "Ocupado" : "Libre";
+        if (userIsBusyAgenda(userId, slot, slotEnd, input.appointments, input.blocks)) {
+          participants[userId] = "Ocupado por Agenda SM";
+          continue;
+        }
+
+        const google = input.googleAvailability?.[userId];
+        if (google && userIsBusyGoogle(userId, slot, slotEnd, input.googleAvailability)) {
+          participants[userId] = "Ocupado por Google Calendar";
+          continue;
+        }
+
+        participants[userId] = google?.connected === false ? "Google Calendar no conectado" : "Libre";
       }
 
-      const result = Object.values(participants).every((value) => value === "Libre") ? "Disponible" : "No disponible";
+      const result = Object.values(participants).every((value) => value === "Libre" || value === "Google Calendar no conectado") ? "Disponible" : "No disponible";
       results.push({ start: slot.toISOString(), end: slotEnd.toISOString(), result, participants });
     }
 

@@ -7,7 +7,7 @@ Google Calendar no es la fuente oficial de agenda. La fuente principal es Supaba
 ## Estado Actual Verificado
 
 - Estado local: la app corre en desarrollo en `http://127.0.0.1:3000`.
-- Vercel: la app puede estar desplegada aunque este checkout local no tenga carpeta `.vercel`. Las variables productivas deben vivir en el panel de Vercel, no en el codigo.
+- Vercel: produccion esperada en `https://agenda-sm-soluciones.vercel.app`. Este checkout local no tiene carpeta `.vercel`; las variables productivas deben vivir en el panel de Vercel, no en el codigo.
 - Variables locales: no existe `.env.local` en este checkout de `agenda-sm`; solo existe `.env.example`.
 - Build: ejecutar `pnpm build` antes de desplegar.
 
@@ -19,7 +19,7 @@ Google Calendar no es la fuente oficial de agenda. La fuente principal es Supaba
 - Resend para emails de notificacion
 - Supabase Admin API `createUser` para alta de usuarios sin email automatico
 - Resend para invitaciones por email separadas del alta
-- Google Calendar Free/Busy API
+- Google Calendar OAuth + Free/Busy API
 - Vercel
 - PWA instalable
 
@@ -48,7 +48,8 @@ EMAIL_FROM=Agenda SM <agenda@smsoluciones.com>
 
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
-GOOGLE_REDIRECT_URI=https://agenda.smsoluciones.com/api/google/callback
+GOOGLE_REDIRECT_URI=https://agenda-sm-soluciones.vercel.app/api/google/callback
+GOOGLE_OAUTH_STATE_SECRET=
 
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 ```
@@ -63,7 +64,8 @@ Variables faltantes para produccion en este workspace:
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
 - `GOOGLE_REDIRECT_URI`
-- `NEXT_PUBLIC_APP_URL` con el dominio final
+- `GOOGLE_OAUTH_STATE_SECRET`
+- `NEXT_PUBLIC_APP_URL=https://agenda-sm-soluciones.vercel.app`
 
 ## Panel Admin De Usuarios
 
@@ -98,11 +100,7 @@ Endpoints:
 - `POST /api/admin/users/:id/reset-pin`
 - `POST /api/admin/users/:id/invite`
 
-El PIN temporal se usa como password inicial en Supabase Auth y tambien se guarda como hash + salt en `user_pins` para auditoria/activacion. No debe ser la seguridad permanente. Despues del primer acceso, el usuario puede cambiar su contrasena en:
-
-```text
-/reset-password
-```
+El PIN individual se usa como clave de acceso en Supabase Auth y tambien se guarda como hash + salt en `user_pins` para auditoria/reset. Agenda SM no obliga cambio de contrasena, no manda recovery email y no usa PIN global.
 
 ## Supabase
 
@@ -140,6 +138,7 @@ RLS de usuarios:
 - Lectura no puede editar usuarios.
 - `user_pins` es solo para Admin.
 - Tokens de Google se guardan para uso server-side y no deben exponerse al cliente.
+- `google_calendar_connections` queda protegida con RLS de Admin y las rutas server-side usan service role; el frontend nunca recibe `access_token` ni `refresh_token`.
 
 ## Vercel
 
@@ -158,38 +157,44 @@ pnpm build
 pnpm install
 ```
 
-6. Configura el dominio `https://agenda.smsoluciones.com`.
+6. Confirma el dominio `https://agenda-sm-soluciones.vercel.app` o agrega un dominio propio si SM Soluciones lo define despues.
 
 Evidencia local: este workspace no tiene `.vercel`, por lo que desde esta maquina no hay enlace local de proyecto Vercel ni variables sincronizadas. En produccion, confirma en Vercel que existan `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_APP_URL`, `RESEND_API_KEY` y `EMAIL_FROM`.
 
-## Google Calendar Free/Busy
+## Google Calendar OAuth + Free/Busy
 
 API correcta: `https://www.googleapis.com/calendar/v3/freeBusy`.
 
-Ruta preparada:
+Rutas implementadas:
 
 ```text
+GET /api/google/connect
+GET /api/google/callback
+GET /api/google/status
 POST /api/google/freebusy
 ```
 
 Estado actual:
 
-- Integracion preparada en servidor.
+- Integracion server-side por usuario.
 - Sin credenciales en este workspace.
 - No importa titulos, invitados, notas ni ubicaciones.
 - Solo procesa bloques `busy` con `start` y `end`.
+- Si un usuario no conecto Google Calendar, Agenda SM sigue operando con citas internas, bloqueos y horario laboral.
 
 Para produccion:
 
 1. Crea OAuth Client en Google Cloud.
 2. Agrega redirect URI:
-   - `https://agenda.smsoluciones.com/api/google/callback`
+   - `https://agenda-sm-soluciones.vercel.app/api/google/callback`
 3. Configura:
    - `GOOGLE_CLIENT_ID`
    - `GOOGLE_CLIENT_SECRET`
    - `GOOGLE_REDIRECT_URI`
-4. Guarda tokens por usuario en `google_calendar_connections`.
-5. Consulta solo Free/Busy al buscar horario disponible.
+   - `GOOGLE_OAUTH_STATE_SECRET`
+4. Cada usuario entra a Configuracion y usa `Conectar Google Calendar`.
+5. Agenda SM guarda tokens por usuario en `google_calendar_connections` via server-side.
+6. Consulta solo Free/Busy al buscar horario disponible.
 
 ## Resend
 
@@ -215,16 +220,16 @@ Para produccion:
 
 ## APIs Integradas Realmente
 
-- Supabase Auth en cliente: login con `signInWithPassword` cuando existen variables.
+- Supabase Auth en cliente: login Email + PIN individual con `signInWithPassword` cuando existen variables.
 - Supabase Admin API en servidor: crear/invitar/editar usuarios cuando existen variables y sesion Admin.
 - FullCalendar: calendario real en UI.
 - Resend: endpoint server-side listo para enviar con credenciales.
-- Google Free/Busy: endpoint server-side listo para consultar con token y calendar IDs.
+- Google OAuth/FreeBusy: endpoints server-side listos para conectar usuarios, guardar tokens y consultar disponibilidad sin detalles privados.
 
 ## APIs Preparadas Pero Sin Credenciales Locales
 
 - Supabase proyecto real: falta `.env.local`.
 - Supabase Admin API: falta `SUPABASE_SERVICE_ROLE_KEY`.
-- Google OAuth/FreeBusy: faltan credenciales OAuth y flujo callback completo.
+- Google OAuth/FreeBusy: falta cargar credenciales OAuth en Vercel/local.
 - Resend: falta API key y remitente verificado.
 - Vercel: falta conectar proyecto y cargar variables en el panel.

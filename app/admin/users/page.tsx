@@ -145,11 +145,11 @@ export default function AdminUsersPage() {
           pin_expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
           google_connected: false,
           last_sign_in_at: null,
-          must_change_password: true,
+          must_change_password: false,
           working_hours
         };
         setUsers((current) => form.id ? current.map((item) => item.id === form.id ? localUser : item) : [localUser, ...current]);
-        setMessage(`Usuario guardado localmente. PIN temporal: ${payload.pin}`);
+        setMessage(`Usuario creado correctamente. PIN temporal: ${payload.pin}`);
         setForm(emptyForm());
         return;
       }
@@ -162,7 +162,7 @@ export default function AdminUsersPage() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "No se pudo guardar usuario.");
-      setMessage(data.temporary_pin ? `${data.message || "Usuario guardado sin envio de email."} PIN temporal: ${data.temporary_pin}` : "Usuario actualizado.");
+      setMessage(data.temporary_pin ? `${data.message || "Usuario creado correctamente"} PIN temporal: ${data.temporary_pin}` : "Usuario actualizado.");
       setForm(emptyForm());
       await loadUsers();
     } catch (error) {

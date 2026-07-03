@@ -34,7 +34,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       "Tu usuario de Agenda SM ya fue creado.",
       `Entra en: ${appUrl}`,
       "",
-      "Usa el PIN temporal que te entregue el administrador. Despues del primer acceso, cambia tu contrasena desde Agenda SM.",
+      "Usa el PIN individual que te entregue el administrador. No compartas tu PIN.",
       "",
       "Google Calendar se conecta desde Agenda SM solo para consultar disponibilidad Free/Busy."
     ].join("\n")

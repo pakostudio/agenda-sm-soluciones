@@ -33,7 +33,7 @@ import {
   demoWorkingHours
 } from "@/lib/demo-data";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
-import type { Appointment, AppointmentModality, AppointmentStatus, AppointmentType, AvailabilitySlot, Profile } from "@/lib/types";
+import type { Appointment, AppointmentModality, AppointmentStatus, AppointmentType, AvailabilitySlot, GoogleAvailability, Profile } from "@/lib/types";
 
 type View = "dashboard" | "calendar" | "agenda" | "availability" | "clients" | "notifications" | "settings";
 
@@ -89,7 +89,7 @@ const blankAppointment = (userId: string): Appointment => {
 
 export default function AgendaSMApp() {
   const [sessionEmail, setSessionEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [pin, setPin] = useState("");
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [activeUser, setActiveUser] = useState<Profile>(demoProfiles[0]);
   const [view, setView] = useState<View>("dashboard");
@@ -102,6 +102,7 @@ export default function AgendaSMApp() {
   const [rangeStart, setRangeStart] = useState(`${todayKey()}T09:00`);
   const [rangeEnd, setRangeEnd] = useState(`${todayKey()}T18:00`);
   const [googleWarning, setGoogleWarning] = useState("");
+  const [googleAvailability, setGoogleAvailability] = useState<GoogleAvailability>({});
 
   useEffect(() => {
     if (!supabase) return;
@@ -154,15 +155,16 @@ export default function AgendaSMApp() {
         appointments,
         workingHours: demoWorkingHours,
         blocks: demoBlocks,
+        googleAvailability,
         stepMinutes: 30
       }).slice(0, 24),
-    [appointments, availabilityParticipants, duration, rangeEnd, rangeStart]
+    [appointments, availabilityParticipants, duration, googleAvailability, rangeEnd, rangeStart]
   );
 
   const login = async () => {
-    if (isSupabaseConfigured && supabase && sessionEmail && password) {
-      const { data, error } = await supabase.auth.signInWithPassword({ email: sessionEmail, password });
-      if (error) alert(error.message);
+    if (isSupabaseConfigured && supabase && sessionEmail && pin) {
+      const { data, error } = await supabase.auth.signInWithPassword({ email: sessionEmail, password: pin });
+      if (error) alert("PIN incorrecto o usuario no registrado.");
       if (!error && data.user) {
         const { data: profile, error: profileError } = await supabase
           .from("profiles")
@@ -235,13 +237,19 @@ export default function AgendaSMApp() {
 
   const testGoogleFreeBusy = async () => {
     setGoogleWarning("");
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (supabase) {
+      const { data } = await supabase.auth.getSession();
+      if (data.session?.access_token) headers.Authorization = `Bearer ${data.session.access_token}`;
+    }
     const response = await fetch("/api/google/freebusy", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ timeMin: new Date(rangeStart).toISOString(), timeMax: new Date(rangeEnd).toISOString(), users: availabilityParticipants })
+      headers,
+      body: JSON.stringify({ timeMin: new Date(rangeStart).toISOString(), timeMax: new Date(rangeEnd).toISOString(), userIds: availabilityParticipants })
     });
     const data = await response.json();
-    setGoogleWarning(data.warning || "Google Free/Busy listo para conectar por usuario.");
+    if (data.users) setGoogleAvailability(data.users);
+    setGoogleWarning(data.warning || (response.ok ? "Google Free/Busy consultado." : data.error || "No se pudo consultar Google Free/Busy."));
   };
 
   if (!isAuthenticated) {
@@ -257,13 +265,12 @@ export default function AgendaSMApp() {
               <input value={sessionEmail} onChange={(event) => setSessionEmail(event.target.value)} placeholder="pako@smsoluciones.com" />
             </div>
             <div className="field">
-              <label>Contrasena</label>
-              <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" placeholder="Supabase Auth" />
+              <label>PIN individual</label>
+              <input value={pin} onChange={(event) => setPin(event.target.value)} type="password" inputMode="numeric" placeholder="PIN" />
             </div>
             <button className="btn primary" onClick={login}>
               Entrar
             </button>
-            <p className="muted">Sin variables de Supabase, la app usa datos locales para desarrollo y QA visual.</p>
           </div>
         </section>
       </main>
@@ -286,7 +293,7 @@ export default function AgendaSMApp() {
         <div className="card" style={{ marginTop: "auto" }}>
           <strong>{activeUser.full_name}</strong>
           <p className="muted">{activeUser.role}</p>
-          <button className="btn" onClick={() => setIsAuthenticated(false)}>
+          <button className="btn" onClick={async () => { await supabase?.auth.signOut(); setIsAuthenticated(false); }}>
             <LogOut size={16} /> Cerrar sesion
           </button>
         </div>
@@ -593,6 +600,43 @@ function NotificationsView() {
 }
 
 function SettingsView({ activeUser, setActiveUser }: { activeUser: Profile; setActiveUser: (profile: Profile) => void }) {
+  const [googleConnected, setGoogleConnected] = useState(false);
+  const [googleMessage, setGoogleMessage] = useState("");
+
+  useEffect(() => {
+    const loadStatus = async () => {
+      if (!supabase) return;
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) return;
+      const response = await fetch("/api/google/status", { headers: { Authorization: `Bearer ${token}` } });
+      const status = await response.json();
+      setGoogleConnected(Boolean(status.connected));
+    };
+    loadStatus();
+  }, []);
+
+  const connectGoogle = async () => {
+    setGoogleMessage("");
+    if (!supabase) {
+      setGoogleMessage("Supabase no configurado.");
+      return;
+    }
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) {
+      setGoogleMessage("Sesion requerida.");
+      return;
+    }
+    const response = await fetch("/api/google/connect", { headers: { Authorization: `Bearer ${token}` } });
+    const payload = await response.json();
+    if (!response.ok) {
+      setGoogleMessage(payload.error || "Google Calendar no configurado.");
+      return;
+    }
+    window.location.href = payload.authUrl;
+  };
+
   return (
     <div className="grid two">
       <section className="card">
@@ -617,7 +661,9 @@ function SettingsView({ activeUser, setActiveUser }: { activeUser: Profile; setA
           <label><input type="checkbox" defaultChecked /> Notificaciones in-app</label>
           <label><input type="checkbox" defaultChecked /> Email con Resend</label>
           <label><input type="checkbox" /> WhatsApp preparado para futuro</label>
-          <label><input type="checkbox" /> Google Calendar Free/Busy activo</label>
+          <label><input type="checkbox" checked={googleConnected} readOnly /> Google Calendar Free/Busy activo</label>
+          <button className="btn primary" onClick={connectGoogle}>Conectar Google Calendar</button>
+          {googleMessage && <p className="muted">{googleMessage}</p>}
         </div>
       </section>
     </div>
@@ -652,6 +698,7 @@ function AppointmentModal({ appointment, setAppointment, saveAppointment, change
           <div className="field"><label>Modalidad</label><select value={appointment.modality} onChange={(event) => update("modality", event.target.value as AppointmentModality)}>{["presencial", "llamada", "videollamada"].map((item) => <option key={item}>{item}</option>)}</select></div>
           <div className="field"><label>Estatus</label><select value={appointment.status} onChange={(event) => update("status", event.target.value as AppointmentStatus)}>{["pendiente", "confirmada", "realizada", "cancelada", "reagendada"].map((item) => <option key={item}>{item}</option>)}</select></div>
           <div className="field"><label>Lugar o link</label><input value={appointment.location_or_link || ""} onChange={(event) => update("location_or_link", event.target.value)} /></div>
+          <label><input type="checkbox" disabled /> Crear Google Meet</label>
           <div className="field full"><label>Participantes internos</label><select multiple value={appointment.participant_ids} onChange={(event) => update("participant_ids", Array.from(event.target.selectedOptions).map((option) => option.value))}>{demoProfiles.map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}</select></div>
           <div className="field full"><label>Notas internas</label><textarea value={appointment.notes || ""} onChange={(event) => update("notes", event.target.value)} /></div>
           <div className="field"><label>Siguiente accion</label><input value={appointment.next_action || ""} onChange={(event) => update("next_action", event.target.value)} /></div>

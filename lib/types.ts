@@ -108,5 +108,15 @@ export type AvailabilitySlot = {
   start: string;
   end: string;
   result: "Disponible" | "No disponible";
-  participants: Record<string, "Libre" | "Ocupado" | "Sin horario">;
+  participants: Record<string, "Libre" | "Ocupado por Agenda SM" | "Ocupado por Google Calendar" | "Fuera de horario laboral" | "Google Calendar no conectado">;
 };
+
+export type GoogleBusyRange = {
+  start: string;
+  end: string;
+};
+
+export type GoogleAvailability = Record<string, {
+  connected: boolean;
+  busy: GoogleBusyRange[];
+}>;

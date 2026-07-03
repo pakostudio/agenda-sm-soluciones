@@ -98,7 +98,7 @@ export async function POST(request: Request) {
         full_name: body.full_name,
         role: body.role,
         source_app: "agenda-sm",
-        must_change_password: true
+        must_change_password: false
       }
     });
 
@@ -114,7 +114,7 @@ export async function POST(request: Request) {
         full_name: body.full_name,
         role: body.role,
         source_app: "agenda-sm",
-        must_change_password: true
+        must_change_password: false
       },
       app_metadata: {
         source_app: "agenda-sm"
@@ -144,7 +144,7 @@ export async function POST(request: Request) {
     role: body.role,
     color: body.color,
     active: body.active,
-    must_change_password: true
+    must_change_password: false
   });
   if (profileError) return NextResponse.json({ error: profileError.message }, { status: 500 });
 
@@ -170,7 +170,7 @@ export async function POST(request: Request) {
     temporary_pin: pin,
     email_sent: false,
     message: existingProfileByEmail.data
-      ? "Usuario existente actualizado en Agenda SM sin envio de email automatico."
-      : "Usuario creado con email confirmado sin envio de email automatico."
+      ? "Usuario actualizado correctamente sin envio de email automatico."
+      : "Usuario creado correctamente"
   });
 }
