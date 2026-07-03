@@ -79,6 +79,8 @@ create table public.appointments (
   type public.appointment_type not null default 'junta',
   modality public.appointment_modality not null default 'videollamada',
   location_or_link text,
+  meet_url text,
+  google_event_id text,
   status public.appointment_status not null default 'pendiente',
   notes text,
   next_action text,

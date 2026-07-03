@@ -1,6 +1,9 @@
 import { createHmac, timingSafeEqual } from "crypto";
 
-const scope = "https://www.googleapis.com/auth/calendar.freebusy";
+const scope = [
+  "https://www.googleapis.com/auth/calendar.freebusy",
+  "https://www.googleapis.com/auth/calendar.events"
+].join(" ");
 
 export const googleEnvReady = Boolean(
   process.env.GOOGLE_CLIENT_ID &&

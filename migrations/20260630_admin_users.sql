@@ -85,3 +85,7 @@ drop policy if exists "google connections admin only" on public.google_calendar_
 create policy "google connections admin only" on public.google_calendar_connections
 for all using (public.is_admin())
 with check (public.is_admin());
+
+alter table public.appointments
+  add column if not exists meet_url text,
+  add column if not exists google_event_id text;

@@ -33,7 +33,7 @@ import {
   demoWorkingHours
 } from "@/lib/demo-data";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
-import type { Appointment, AppointmentModality, AppointmentStatus, AppointmentType, AvailabilitySlot, GoogleAvailability, Profile } from "@/lib/types";
+import type { Appointment, AppointmentModality, AppointmentStatus, AppointmentType, AvailabilitySlot, Client, Contact, GoogleAvailability, Profile, Project, WorkingHour } from "@/lib/types";
 
 type View = "dashboard" | "calendar" | "agenda" | "availability" | "clients" | "notifications" | "settings";
 
@@ -69,9 +69,9 @@ const blankAppointment = (userId: string): Appointment => {
   return {
     id: `local-${crypto.randomUUID()}`,
     title: "",
-    client_id: demoClients[0]?.id,
-    project_id: demoProjects[0]?.id,
-    contact_id: demoContacts[0]?.id,
+    client_id: null,
+    project_id: null,
+    contact_id: null,
     responsible_user_id: userId,
     participant_ids: [userId],
     start_at: start.toISOString(),
@@ -92,8 +92,13 @@ export default function AgendaSMApp() {
   const [pin, setPin] = useState("");
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [activeUser, setActiveUser] = useState<Profile>(demoProfiles[0]);
+  const [profiles, setProfiles] = useState<Profile[]>(isSupabaseConfigured ? [] : demoProfiles);
+  const [workingHours, setWorkingHours] = useState<WorkingHour[]>(isSupabaseConfigured ? [] : demoWorkingHours);
+  const [clients, setClients] = useState<Client[]>(isSupabaseConfigured ? [] : demoClients);
+  const [projects, setProjects] = useState<Project[]>(isSupabaseConfigured ? [] : demoProjects);
+  const [contacts, setContacts] = useState<Contact[]>(isSupabaseConfigured ? [] : demoContacts);
   const [view, setView] = useState<View>("dashboard");
-  const [appointments, setAppointments] = useState<Appointment[]>(demoAppointments);
+  const [appointments, setAppointments] = useState<Appointment[]>(isSupabaseConfigured ? [] : demoAppointments);
   const [selected, setSelected] = useState<Appointment | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [memberFilter, setMemberFilter] = useState("all");
@@ -103,6 +108,38 @@ export default function AgendaSMApp() {
   const [rangeEnd, setRangeEnd] = useState(`${todayKey()}T18:00`);
   const [googleWarning, setGoogleWarning] = useState("");
   const [googleAvailability, setGoogleAvailability] = useState<GoogleAvailability>({});
+  const [createMeet, setCreateMeet] = useState(false);
+
+  const loadAppData = async (profile: Profile) => {
+    if (!supabase) return;
+    const [profileRows, appointmentRows, participantRows, hoursRows, clientRows, projectRows, contactRows] = await Promise.all([
+      supabase.from("profiles").select("id, full_name, primary_email, role, color, active, last_sign_in_at, must_change_password").eq("active", true).order("full_name"),
+      supabase.from("appointments").select("*").order("start_at", { ascending: true }),
+      supabase.from("appointment_participants").select("appointment_id, user_id"),
+      supabase.from("working_hours").select("id, user_id, day_of_week, start_time, end_time, is_active"),
+      supabase.from("clients").select("id, name, status, notes").order("name"),
+      supabase.from("projects").select("id, client_id, name, status").order("name"),
+      supabase.from("contacts").select("id, client_id, name, email, phone, position").order("name")
+    ]);
+
+    const loadedProfiles = (profileRows.data as Profile[] | null) || [profile];
+    const participantsByAppointment = new Map<string, string[]>();
+    (participantRows.data || []).forEach((item) => {
+      participantsByAppointment.set(item.appointment_id, [...(participantsByAppointment.get(item.appointment_id) || []), item.user_id]);
+    });
+    const loadedAppointments = (appointmentRows.data || []).map((item) => ({
+      ...item,
+      participant_ids: participantsByAppointment.get(item.id) || [item.responsible_user_id]
+    })) as Appointment[];
+
+    setProfiles(loadedProfiles);
+    setWorkingHours((hoursRows.data as WorkingHour[] | null) || []);
+    setAppointments(loadedAppointments);
+    setClients((clientRows.data as Client[] | null) || []);
+    setProjects((projectRows.data as Project[] | null) || []);
+    setContacts((contactRows.data as Contact[] | null) || []);
+    setAvailabilityParticipants((current) => current.filter((id) => loadedProfiles.some((item) => item.id === id)).length ? current.filter((id) => loadedProfiles.some((item) => item.id === id)) : [profile.id]);
+  };
 
   useEffect(() => {
     if (!supabase) return;
@@ -117,7 +154,10 @@ export default function AgendaSMApp() {
           await client.auth.signOut();
           return;
         }
-        if (profile) setActiveUser(profile as Profile);
+        if (profile) {
+          setActiveUser(profile as Profile);
+          await loadAppData(profile as Profile);
+        }
         setSessionEmail(email);
         setIsAuthenticated(true);
       }
@@ -153,12 +193,12 @@ export default function AgendaSMApp() {
         workdayStart: "09:00",
         workdayEnd: "18:00",
         appointments,
-        workingHours: demoWorkingHours,
-        blocks: demoBlocks,
+        workingHours,
+        blocks: isSupabaseConfigured ? [] : demoBlocks,
         googleAvailability,
         stepMinutes: 30
       }).slice(0, 24),
-    [appointments, availabilityParticipants, duration, googleAvailability, rangeEnd, rangeStart]
+    [appointments, availabilityParticipants, duration, googleAvailability, rangeEnd, rangeStart, workingHours]
   );
 
   const login = async () => {
@@ -183,6 +223,7 @@ export default function AgendaSMApp() {
         }
         await supabase.from("profiles").update({ last_sign_in_at: new Date().toISOString() }).eq("id", data.user.id);
         setActiveUser(profile as Profile);
+        await loadAppData(profile as Profile);
         setIsAuthenticated(true);
       }
       return;
@@ -193,7 +234,7 @@ export default function AgendaSMApp() {
     setIsAuthenticated(true);
   };
 
-  const saveAppointment = (appointment: Appointment) => {
+  const saveAppointment = async (appointment: Appointment) => {
     const start = new Date(appointment.start_at);
     const end = new Date(appointment.end_at);
     if (!appointment.title.trim()) {
@@ -205,16 +246,79 @@ export default function AgendaSMApp() {
       return;
     }
 
-    const normalized = {
+    let normalized: Appointment = {
       ...appointment,
       duration_minutes: Math.round((end.getTime() - start.getTime()) / 60_000),
       updated_by: activeUser.id
     };
 
+    if (isSupabaseConfigured && supabase) {
+      const isNew = normalized.id.startsWith("local-");
+      let meetData: { meet_url?: string | null; google_event_id?: string | null } = {};
+      if (createMeet) {
+        const { data } = await supabase.auth.getSession();
+        const token = data.session?.access_token;
+        if (token) {
+          const response = await fetch("/api/google/create-meet", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              responsible_user_id: normalized.responsible_user_id,
+              title: normalized.title,
+              start_at: normalized.start_at,
+              end_at: normalized.end_at,
+              notes: normalized.notes
+            })
+          });
+          const payload = await response.json();
+          if (response.ok) meetData = payload;
+          else alert(payload.error || "La cita se creo, pero no se pudo generar Meet.");
+        }
+      }
+
+      const dbPayload = {
+        title: normalized.title,
+        client_id: normalized.client_id || null,
+        project_id: normalized.project_id || null,
+        contact_id: normalized.contact_id || null,
+        responsible_user_id: normalized.responsible_user_id,
+        start_at: normalized.start_at,
+        end_at: normalized.end_at,
+        duration_minutes: normalized.duration_minutes,
+        type: normalized.type,
+        modality: normalized.modality,
+        location_or_link: meetData.meet_url || normalized.location_or_link || null,
+        meet_url: meetData.meet_url || normalized.meet_url || null,
+        google_event_id: meetData.google_event_id || normalized.google_event_id || null,
+        status: normalized.status,
+        notes: normalized.notes || null,
+        next_action: normalized.next_action || null,
+        next_action_due_at: normalized.next_action_due_at || null,
+        updated_by: activeUser.id,
+        ...(isNew ? { created_by: activeUser.id } : {})
+      };
+
+      const result = isNew
+        ? await supabase.from("appointments").insert(dbPayload).select("*").single()
+        : await supabase.from("appointments").update(dbPayload).eq("id", normalized.id).select("*").single();
+      if (result.error || !result.data) {
+        alert(result.error?.message || "No se pudo guardar la cita.");
+        return;
+      }
+
+      await supabase.from("appointment_participants").delete().eq("appointment_id", result.data.id);
+      const participantIds = Array.from(new Set([normalized.responsible_user_id, ...normalized.participant_ids]));
+      if (participantIds.length) {
+        await supabase.from("appointment_participants").insert(participantIds.map((userId) => ({ appointment_id: result.data.id, user_id: userId })));
+      }
+      normalized = { ...(result.data as Appointment), participant_ids: participantIds, updated_by: activeUser.id };
+    }
+
     setAppointments((current) => {
       const exists = current.some((item) => item.id === normalized.id);
       return exists ? current.map((item) => (item.id === normalized.id ? normalized : item)) : [normalized, ...current];
     });
+    setCreateMeet(false);
     setIsModalOpen(false);
   };
 
@@ -308,7 +412,7 @@ export default function AgendaSMApp() {
           <div className="toolbar">
             <select value={memberFilter} onChange={(event) => setMemberFilter(event.target.value)}>
               <option value="all">Todos los miembros</option>
-              {demoProfiles.map((profile) => (
+              {profiles.map((profile) => (
                 <option key={profile.id} value={profile.id}>
                   {profile.full_name}
                 </option>
@@ -321,7 +425,7 @@ export default function AgendaSMApp() {
         </header>
 
         {view === "dashboard" && <Dashboard dashboard={dashboard} openAppointment={(item) => { setSelected(item); setIsModalOpen(true); }} />}
-        {view === "calendar" && <CalendarView appointments={visibleAppointments} onSelect={(item) => { setSelected(item); setIsModalOpen(true); }} />}
+        {view === "calendar" && <CalendarView appointments={visibleAppointments} profiles={profiles} onSelect={(item) => { setSelected(item); setIsModalOpen(true); }} />}
         {view === "agenda" && <AgendaList appointments={visibleAppointments} onSelect={(item) => { setSelected(item); setIsModalOpen(true); }} />}
         {view === "availability" && (
           <AvailabilityView
@@ -334,14 +438,15 @@ export default function AgendaSMApp() {
             rangeEnd={rangeEnd}
             setRangeEnd={setRangeEnd}
             availability={availability}
+            profiles={profiles}
             googleWarning={googleWarning}
             testGoogleFreeBusy={testGoogleFreeBusy}
             createFromSlot={openNew}
           />
         )}
-        {view === "clients" && <ClientsView />}
+        {view === "clients" && <ClientsView clients={clients} projects={projects} contacts={contacts} />}
         {view === "notifications" && <NotificationsView />}
-        {view === "settings" && <SettingsView activeUser={activeUser} setActiveUser={setActiveUser} />}
+        {view === "settings" && <SettingsView activeUser={activeUser} profiles={profiles} setActiveUser={setActiveUser} />}
       </section>
 
       <nav className="mobile-nav">
@@ -362,6 +467,12 @@ export default function AgendaSMApp() {
           setAppointment={setSelected}
           saveAppointment={saveAppointment}
           changeStatus={changeStatus}
+          profiles={profiles}
+          clients={clients}
+          projects={projects}
+          contacts={contacts}
+          createMeet={createMeet}
+          setCreateMeet={setCreateMeet}
           close={() => setIsModalOpen(false)}
         />
       )}
@@ -423,7 +534,7 @@ function Metric({ label, value }: { label: string; value: number }) {
   );
 }
 
-function CalendarView({ appointments, onSelect }: { appointments: Appointment[]; onSelect: (item: Appointment) => void }) {
+function CalendarView({ appointments, profiles, onSelect }: { appointments: Appointment[]; profiles: Profile[]; onSelect: (item: Appointment) => void }) {
   return (
     <section className="card">
       <FullCalendar
@@ -440,7 +551,7 @@ function CalendarView({ appointments, onSelect }: { appointments: Appointment[];
           title: item.title,
           start: item.start_at,
           end: item.end_at,
-          backgroundColor: demoProfiles.find((profile) => profile.id === item.responsible_user_id)?.color || "#104080",
+          backgroundColor: profiles.find((profile) => profile.id === item.responsible_user_id)?.color || "#104080",
           borderColor: "transparent"
         }))}
         eventClick={(info) => {
@@ -487,6 +598,7 @@ function AvailabilityView(props: {
   rangeEnd: string;
   setRangeEnd: (value: string) => void;
   availability: AvailabilitySlot[];
+  profiles: Profile[];
   googleWarning: string;
   testGoogleFreeBusy: () => void;
   createFromSlot: (slot: AvailabilitySlot) => void;
@@ -499,7 +611,7 @@ function AvailabilityView(props: {
           <div className="field">
             <label>Participantes internos</label>
             <select multiple value={props.participantIds} onChange={(event) => props.setParticipantIds(Array.from(event.target.selectedOptions).map((option) => option.value))}>
-              {demoProfiles.filter((profile) => profile.active).map((profile) => (
+              {props.profiles.filter((profile) => profile.active).map((profile) => (
                 <option key={profile.id} value={profile.id}>{profile.full_name}</option>
               ))}
             </select>
@@ -543,7 +655,7 @@ function AvailabilityView(props: {
           <thead>
             <tr>
               <th>Hora</th>
-              {props.participantIds.map((id) => <th key={id}>{demoProfiles.find((profile) => profile.id === id)?.full_name}</th>)}
+              {props.participantIds.map((id) => <th key={id}>{props.profiles.find((profile) => profile.id === id)?.full_name}</th>)}
               <th>Resultado</th>
               <th>Accion</th>
             </tr>
@@ -564,11 +676,11 @@ function AvailabilityView(props: {
   );
 }
 
-function ClientsView() {
+function ClientsView({ clients, projects, contacts }: { clients: Client[]; projects: Project[]; contacts: Contact[] }) {
   return (
     <div className="grid two">
-      <EntityList title="Clientes" rows={demoClients.map((item) => `${item.name} - ${item.status}`)} />
-      <EntityList title="Proyectos y contactos" rows={[...demoProjects.map((item) => item.name), ...demoContacts.map((item) => `${item.name} / ${item.email}`)]} />
+      <EntityList title="Clientes" rows={clients.length ? clients.map((item) => `${item.name} - ${item.status}`) : ["Sin clientes registrados"]} />
+      <EntityList title="Proyectos y contactos" rows={projects.length || contacts.length ? [...projects.map((item) => item.name), ...contacts.map((item) => `${item.name} / ${item.email || "sin email"}`)] : ["Sin proyectos ni contactos registrados"]} />
     </div>
   );
 }
@@ -599,7 +711,7 @@ function NotificationsView() {
   );
 }
 
-function SettingsView({ activeUser, setActiveUser }: { activeUser: Profile; setActiveUser: (profile: Profile) => void }) {
+function SettingsView({ activeUser, profiles, setActiveUser }: { activeUser: Profile; profiles: Profile[]; setActiveUser: (profile: Profile) => void }) {
   const [googleConnected, setGoogleConnected] = useState(false);
   const [googleMessage, setGoogleMessage] = useState("");
 
@@ -642,7 +754,7 @@ function SettingsView({ activeUser, setActiveUser }: { activeUser: Profile; setA
       <section className="card">
         <div className="section-title"><h2>Miembros y roles</h2></div>
         <div className="list">
-          {demoProfiles.map((profile) => (
+          {profiles.map((profile) => (
             <button className="item" key={profile.id} onClick={() => setActiveUser(profile)}>
               <h3>{profile.full_name}</h3>
               <p className="muted">{profile.primary_email}</p>
@@ -670,11 +782,17 @@ function SettingsView({ activeUser, setActiveUser }: { activeUser: Profile; setA
   );
 }
 
-function AppointmentModal({ appointment, setAppointment, saveAppointment, changeStatus, close }: {
+function AppointmentModal({ appointment, setAppointment, saveAppointment, changeStatus, profiles, clients, projects, contacts, createMeet, setCreateMeet, close }: {
   appointment: Appointment;
   setAppointment: (appointment: Appointment) => void;
   saveAppointment: (appointment: Appointment) => void;
   changeStatus: (appointment: Appointment, status: AppointmentStatus) => void;
+  profiles: Profile[];
+  clients: Client[];
+  projects: Project[];
+  contacts: Contact[];
+  createMeet: boolean;
+  setCreateMeet: (value: boolean) => void;
   close: () => void;
 }) {
   const update = <K extends keyof Appointment>(key: K, value: Appointment[K]) => setAppointment({ ...appointment, [key]: value });
@@ -688,18 +806,18 @@ function AppointmentModal({ appointment, setAppointment, saveAppointment, change
         </div>
         <div className="form-grid">
           <div className="field full"><label>Titulo</label><input value={appointment.title} onChange={(event) => update("title", event.target.value)} /></div>
-          <div className="field"><label>Cliente</label><select value={appointment.client_id || ""} onChange={(event) => update("client_id", event.target.value)}>{demoClients.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
-          <div className="field"><label>Proyecto</label><select value={appointment.project_id || ""} onChange={(event) => update("project_id", event.target.value)}>{demoProjects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
-          <div className="field"><label>Contacto</label><select value={appointment.contact_id || ""} onChange={(event) => update("contact_id", event.target.value)}>{demoContacts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
-          <div className="field"><label>Responsable</label><select value={appointment.responsible_user_id} onChange={(event) => update("responsible_user_id", event.target.value)}>{demoProfiles.map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}</select></div>
+          <div className="field"><label>Cliente</label><select value={appointment.client_id || ""} onChange={(event) => update("client_id", event.target.value || null)}><option value="">Sin cliente</option>{clients.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
+          <div className="field"><label>Proyecto</label><select value={appointment.project_id || ""} onChange={(event) => update("project_id", event.target.value || null)}><option value="">Sin proyecto</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
+          <div className="field"><label>Contacto</label><select value={appointment.contact_id || ""} onChange={(event) => update("contact_id", event.target.value || null)}><option value="">Sin contacto</option>{contacts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
+          <div className="field"><label>Responsable</label><select value={appointment.responsible_user_id} onChange={(event) => update("responsible_user_id", event.target.value)}>{profiles.map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}</select></div>
           <div className="field"><label>Inicio</label><input type="datetime-local" value={toInputDateTime(appointment.start_at)} onChange={(event) => update("start_at", new Date(event.target.value).toISOString())} /></div>
           <div className="field"><label>Fin</label><input type="datetime-local" value={toInputDateTime(appointment.end_at)} onChange={(event) => update("end_at", new Date(event.target.value).toISOString())} /></div>
           <div className="field"><label>Tipo</label><select value={appointment.type} onChange={(event) => update("type", event.target.value as AppointmentType)}>{["llamada", "junta", "visita", "seguimiento", "entrega", "cobranza", "otro"].map((item) => <option key={item}>{item}</option>)}</select></div>
           <div className="field"><label>Modalidad</label><select value={appointment.modality} onChange={(event) => update("modality", event.target.value as AppointmentModality)}>{["presencial", "llamada", "videollamada"].map((item) => <option key={item}>{item}</option>)}</select></div>
           <div className="field"><label>Estatus</label><select value={appointment.status} onChange={(event) => update("status", event.target.value as AppointmentStatus)}>{["pendiente", "confirmada", "realizada", "cancelada", "reagendada"].map((item) => <option key={item}>{item}</option>)}</select></div>
           <div className="field"><label>Lugar o link</label><input value={appointment.location_or_link || ""} onChange={(event) => update("location_or_link", event.target.value)} /></div>
-          <label><input type="checkbox" disabled /> Crear Google Meet</label>
-          <div className="field full"><label>Participantes internos</label><select multiple value={appointment.participant_ids} onChange={(event) => update("participant_ids", Array.from(event.target.selectedOptions).map((option) => option.value))}>{demoProfiles.map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}</select></div>
+          <label><input type="checkbox" checked={createMeet} onChange={(event) => setCreateMeet(event.target.checked)} /> Crear Google Meet</label>
+          <div className="field full"><label>Participantes internos</label><select multiple value={appointment.participant_ids} onChange={(event) => update("participant_ids", Array.from(event.target.selectedOptions).map((option) => option.value))}>{profiles.map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}</select></div>
           <div className="field full"><label>Notas internas</label><textarea value={appointment.notes || ""} onChange={(event) => update("notes", event.target.value)} /></div>
           <div className="field"><label>Siguiente accion</label><input value={appointment.next_action || ""} onChange={(event) => update("next_action", event.target.value)} /></div>
           <div className="field"><label>Fecha siguiente accion</label><input type="datetime-local" value={appointment.next_action_due_at ? toInputDateTime(appointment.next_action_due_at) : ""} onChange={(event) => update("next_action_due_at", event.target.value ? new Date(event.target.value).toISOString() : "")} /></div>

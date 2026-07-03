@@ -64,6 +64,8 @@ export type Appointment = {
   type: AppointmentType;
   modality: AppointmentModality;
   location_or_link?: string | null;
+  meet_url?: string | null;
+  google_event_id?: string | null;
   status: AppointmentStatus;
   notes?: string | null;
   next_action?: string | null;

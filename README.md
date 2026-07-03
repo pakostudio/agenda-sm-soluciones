@@ -225,6 +225,7 @@ Para produccion:
 - FullCalendar: calendario real en UI.
 - Resend: endpoint server-side listo para enviar con credenciales.
 - Google OAuth/FreeBusy: endpoints server-side listos para conectar usuarios, guardar tokens y consultar disponibilidad sin detalles privados.
+- Google Meet: endpoint server-side listo para crear evento con `conferenceDataVersion=1` cuando el responsable conecto Google Calendar con scope de eventos.
 
 ## APIs Preparadas Pero Sin Credenciales Locales
 
