@@ -32,7 +32,7 @@ import {
   demoProjects,
   demoWorkingHours
 } from "@/lib/demo-data";
-import { isSupabaseConfigured, supabase } from "@/lib/supabase";
+import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase";
 import type { Appointment, AppointmentModality, AppointmentStatus, AppointmentType, AvailabilitySlot, Client, Contact, GoogleAvailability, Profile, Project, WorkingHour } from "@/lib/types";
 
 type View = "dashboard" | "calendar" | "agenda" | "availability" | "clients" | "notifications" | "settings";
@@ -111,15 +111,16 @@ export default function AgendaSMApp() {
   const [createMeet, setCreateMeet] = useState(false);
 
   const loadAppData = async (profile: Profile) => {
-    if (!supabase) return;
+    const client = await getSupabaseBrowserClient();
+    if (!client) return;
     const [profileRows, appointmentRows, participantRows, hoursRows, clientRows, projectRows, contactRows] = await Promise.all([
-      supabase.from("profiles").select("id, full_name, primary_email, role, color, active, last_sign_in_at, must_change_password").eq("active", true).order("full_name"),
-      supabase.from("appointments").select("*").order("start_at", { ascending: true }),
-      supabase.from("appointment_participants").select("appointment_id, user_id"),
-      supabase.from("working_hours").select("id, user_id, day_of_week, start_time, end_time, is_active"),
-      supabase.from("clients").select("id, name, status, notes").order("name"),
-      supabase.from("projects").select("id, client_id, name, status").order("name"),
-      supabase.from("contacts").select("id, client_id, name, email, phone, position").order("name")
+      client.from("profiles").select("id, full_name, primary_email, role, color, active, last_sign_in_at, must_change_password").eq("active", true).order("full_name"),
+      client.from("appointments").select("*").order("start_at", { ascending: true }),
+      client.from("appointment_participants").select("appointment_id, user_id"),
+      client.from("working_hours").select("id, user_id, day_of_week, start_time, end_time, is_active"),
+      client.from("clients").select("id, name, status, notes").order("name"),
+      client.from("projects").select("id, client_id, name, status").order("name"),
+      client.from("contacts").select("id, client_id, name, email, phone, position").order("name")
     ]);
 
     const loadedProfiles = (profileRows.data as Profile[] | null) || [profile];
@@ -142,9 +143,9 @@ export default function AgendaSMApp() {
   };
 
   useEffect(() => {
-    if (!supabase) return;
-    const client = supabase;
     const restoreSession = async () => {
+      const client = await getSupabaseBrowserClient();
+      if (!client) return;
       const { data } = await client.auth.getSession();
       const session = data.session;
       const email = session?.user.email;
@@ -202,26 +203,27 @@ export default function AgendaSMApp() {
   );
 
   const login = async () => {
-    if (isSupabaseConfigured && supabase && sessionEmail && pin) {
-      const { data, error } = await supabase.auth.signInWithPassword({ email: sessionEmail, password: pin });
+    const client = await getSupabaseBrowserClient();
+    if (client && isSupabaseConfigured && sessionEmail && pin) {
+      const { data, error } = await client.auth.signInWithPassword({ email: sessionEmail, password: pin });
       if (error) alert("PIN incorrecto o usuario no registrado.");
       if (!error && data.user) {
-        const { data: profile, error: profileError } = await supabase
+        const { data: profile, error: profileError } = await client
           .from("profiles")
           .select("id, full_name, primary_email, role, color, active, last_sign_in_at, must_change_password")
           .eq("id", data.user.id)
           .single();
         if (profileError || !profile) {
           alert("No existe perfil activo para este usuario.");
-          await supabase.auth.signOut();
+          await client.auth.signOut();
           return;
         }
         if (!profile.active) {
           alert("Este usuario esta inactivo. Contacta al administrador.");
-          await supabase.auth.signOut();
+          await client.auth.signOut();
           return;
         }
-        await supabase.from("profiles").update({ last_sign_in_at: new Date().toISOString() }).eq("id", data.user.id);
+        await client.from("profiles").update({ last_sign_in_at: new Date().toISOString() }).eq("id", data.user.id);
         setActiveUser(profile as Profile);
         await loadAppData(profile as Profile);
         setIsAuthenticated(true);
@@ -252,11 +254,12 @@ export default function AgendaSMApp() {
       updated_by: activeUser.id
     };
 
-    if (isSupabaseConfigured && supabase) {
+    const client = await getSupabaseBrowserClient();
+    if (client && isSupabaseConfigured) {
       const isNew = normalized.id.startsWith("local-");
       let meetData: { meet_url?: string | null; google_event_id?: string | null } = {};
       if (createMeet) {
-        const { data } = await supabase.auth.getSession();
+        const { data } = await client.auth.getSession();
         const token = data.session?.access_token;
         if (token) {
           const response = await fetch("/api/google/create-meet", {
@@ -299,17 +302,17 @@ export default function AgendaSMApp() {
       };
 
       const result = isNew
-        ? await supabase.from("appointments").insert(dbPayload).select("*").single()
-        : await supabase.from("appointments").update(dbPayload).eq("id", normalized.id).select("*").single();
+        ? await client.from("appointments").insert(dbPayload).select("*").single()
+        : await client.from("appointments").update(dbPayload).eq("id", normalized.id).select("*").single();
       if (result.error || !result.data) {
         alert(result.error?.message || "No se pudo guardar la cita.");
         return;
       }
 
-      await supabase.from("appointment_participants").delete().eq("appointment_id", result.data.id);
+      await client.from("appointment_participants").delete().eq("appointment_id", result.data.id);
       const participantIds = Array.from(new Set([normalized.responsible_user_id, ...normalized.participant_ids]));
       if (participantIds.length) {
-        await supabase.from("appointment_participants").insert(participantIds.map((userId) => ({ appointment_id: result.data.id, user_id: userId })));
+        await client.from("appointment_participants").insert(participantIds.map((userId) => ({ appointment_id: result.data.id, user_id: userId })));
       }
       normalized = { ...(result.data as Appointment), participant_ids: participantIds, updated_by: activeUser.id };
     }
@@ -342,8 +345,9 @@ export default function AgendaSMApp() {
   const testGoogleFreeBusy = async () => {
     setGoogleWarning("");
     const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (supabase) {
-      const { data } = await supabase.auth.getSession();
+    const client = await getSupabaseBrowserClient();
+    if (client) {
+      const { data } = await client.auth.getSession();
       if (data.session?.access_token) headers.Authorization = `Bearer ${data.session.access_token}`;
     }
     const response = await fetch("/api/google/freebusy", {
@@ -397,7 +401,7 @@ export default function AgendaSMApp() {
         <div className="card" style={{ marginTop: "auto" }}>
           <strong>{activeUser.full_name}</strong>
           <p className="muted">{activeUser.role}</p>
-          <button className="btn" onClick={async () => { await supabase?.auth.signOut(); setIsAuthenticated(false); }}>
+          <button className="btn" onClick={async () => { const client = await getSupabaseBrowserClient(); await client?.auth.signOut(); setIsAuthenticated(false); }}>
             <LogOut size={16} /> Cerrar sesion
           </button>
         </div>
@@ -717,8 +721,9 @@ function SettingsView({ activeUser, profiles, setActiveUser }: { activeUser: Pro
 
   useEffect(() => {
     const loadStatus = async () => {
-      if (!supabase) return;
-      const { data } = await supabase.auth.getSession();
+      const client = await getSupabaseBrowserClient();
+      if (!client) return;
+      const { data } = await client.auth.getSession();
       const token = data.session?.access_token;
       if (!token) return;
       const response = await fetch("/api/google/status", { headers: { Authorization: `Bearer ${token}` } });
@@ -730,11 +735,12 @@ function SettingsView({ activeUser, profiles, setActiveUser }: { activeUser: Pro
 
   const connectGoogle = async () => {
     setGoogleMessage("");
-    if (!supabase) {
+    const client = await getSupabaseBrowserClient();
+    if (!client) {
       setGoogleMessage("Supabase no configurado.");
       return;
     }
-    const { data } = await supabase.auth.getSession();
+    const { data } = await client.auth.getSession();
     const token = data.session?.access_token;
     if (!token) {
       setGoogleMessage("Sesion requerida.");
