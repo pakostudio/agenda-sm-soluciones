@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { CheckCircle2, Mail, Plus, RefreshCw, Shield, UserCog, XCircle } from "lucide-react";
@@ -53,8 +53,14 @@ export default function AdminUsersPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [isRealApi, setIsRealApi] = useState(false);
   const [accessDenied, setAccessDenied] = useState(false);
+  const formRef = useRef<HTMLElement | null>(null);
 
   const selectedUser = useMemo(() => users.find((user) => user.id === form.id), [form.id, users]);
+
+  const showMessage = (text: string) => {
+    setMessage(text);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
   useEffect(() => {
     loadUsers();
@@ -200,9 +206,13 @@ export default function AdminUsersPage() {
       work_start: firstHour?.start_time?.slice(0, 5) || "09:00",
       work_end: firstHour?.end_time?.slice(0, 5) || "18:00"
     });
+    setMessage(`Editando a ${user.full_name}. Revisa el formulario de arriba y presiona Guardar cambios.`);
+    formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   const patchUser = async (user: AdminUser, patch: Partial<UserForm>) => {
+    setIsLoading(true);
+    setMessage(`${patch.active === false ? "Desactivando" : "Actualizando"} a ${user.full_name}...`);
     const payload = {
       full_name: patch.full_name ?? user.full_name,
       primary_email: patch.primary_email ?? user.primary_email,
@@ -218,69 +228,85 @@ export default function AdminUsersPage() {
       }))
     };
 
-    const headers = await authHeaders();
-    const client = await getSupabaseBrowserClient();
-    if (!client || !isSupabaseConfigured) {
-      setUsers((current) => current.map((item) => item.id === user.id ? { ...item, ...payload } : item));
-      setMessage(`Usuario ${payload.active ? "activado" : "desactivado"} localmente.`);
-      return;
-    }
-    if (!headers) {
-      setMessage("Sesion requerida para editar usuarios reales.");
-      return;
-    }
+    try {
+      const headers = await authHeaders();
+      const client = await getSupabaseBrowserClient();
+      if (!client || !isSupabaseConfigured) {
+        setUsers((current) => current.map((item) => item.id === user.id ? { ...item, ...payload } : item));
+        showMessage(`Usuario ${payload.active ? "activado" : "desactivado"} localmente.`);
+        return;
+      }
+      if (!headers) {
+        showMessage("Sesion requerida para editar usuarios reales.");
+        return;
+      }
 
-    const response = await fetch(`/api/admin/users/${user.id}`, {
-      method: "PATCH",
-      headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-    const data = await response.json();
-    setMessage(response.ok ? "Usuario actualizado." : data.error);
-    await loadUsers();
+      const response = await fetch(`/api/admin/users/${user.id}`, {
+        method: "PATCH",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await response.json();
+      showMessage(response.ok ? `Usuario ${payload.active ? "activado" : "desactivado"} correctamente.` : data.error);
+      await loadUsers();
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const resetPin = async (user: AdminUser) => {
-    const headers = await authHeaders();
-    const client = await getSupabaseBrowserClient();
-    if (!client || !isSupabaseConfigured) {
-      const pin = generatePin();
-      setMessage(`PIN temporal local para ${user.full_name}: ${pin}`);
-      return;
+    setIsLoading(true);
+    setMessage(`Generando PIN temporal para ${user.full_name}...`);
+    try {
+      const headers = await authHeaders();
+      const client = await getSupabaseBrowserClient();
+      if (!client || !isSupabaseConfigured) {
+        const pin = generatePin();
+        showMessage(`PIN temporal local para ${user.full_name}: ${pin}`);
+        return;
+      }
+      if (!headers) {
+        showMessage("Sesion requerida para resetear PIN.");
+        return;
+      }
+      const response = await fetch(`/api/admin/users/${user.id}/reset-pin`, { method: "POST", headers });
+      const data = await response.json();
+      showMessage(response.ok ? `PIN temporal para ${user.full_name}: ${data.temporary_pin}` : data.error);
+      await loadUsers();
+    } finally {
+      setIsLoading(false);
     }
-    if (!headers) {
-      setMessage("Sesion requerida para resetear PIN.");
-      return;
-    }
-    const response = await fetch(`/api/admin/users/${user.id}/reset-pin`, { method: "POST", headers });
-    const data = await response.json();
-    setMessage(response.ok ? `PIN temporal para ${user.full_name}: ${data.temporary_pin}` : data.error);
-    await loadUsers();
   };
 
   const sendInvite = async (user?: AdminUser) => {
     const target = user || selectedUser;
     if (!target) {
-      setMessage("Selecciona o guarda un usuario antes de enviar invitacion.");
+      showMessage("Selecciona o guarda un usuario antes de enviar invitacion.");
       return;
     }
-    const headers = await authHeaders();
-    const client = await getSupabaseBrowserClient();
-    if (!client || !isSupabaseConfigured) {
-      setMessage(`Invitacion preparada para ${target.primary_email}. Configura Supabase/Resend para enviarla.`);
-      return;
+    setIsLoading(true);
+    setMessage(`Preparando invitacion para ${target.primary_email}...`);
+    try {
+      const headers = await authHeaders();
+      const client = await getSupabaseBrowserClient();
+      if (!client || !isSupabaseConfigured) {
+        showMessage(`Invitacion preparada para ${target.primary_email}. Configura Supabase/Resend para enviarla.`);
+        return;
+      }
+      if (!headers) {
+        showMessage("Sesion requerida para enviar invitacion.");
+        return;
+      }
+      const response = await fetch(`/api/admin/users/${target.id}/invite`, { method: "POST", headers });
+      const data = await response.json();
+      if (!response.ok) {
+        showMessage(data.error || "No se pudo enviar invitacion.");
+        return;
+      }
+      showMessage(data.sent ? `Invitacion enviada a ${target.primary_email}.` : data.warning || "Resend no configurado; usuario creado sin envío de invitación");
+    } finally {
+      setIsLoading(false);
     }
-    if (!headers) {
-      setMessage("Sesion requerida para enviar invitacion.");
-      return;
-    }
-    const response = await fetch(`/api/admin/users/${target.id}/invite`, { method: "POST", headers });
-    const data = await response.json();
-    if (!response.ok) {
-      setMessage(data.error || "No se pudo enviar invitacion.");
-      return;
-    }
-    setMessage(data.sent ? `Invitacion enviada a ${target.primary_email}.` : data.warning || "Resend no configurado; usuario creado sin envío de invitación");
   };
 
   return (
@@ -299,6 +325,8 @@ export default function AdminUsersPage() {
         </div>
       </header>
 
+      {message && <div className="admin-status" role="status">{message}</div>}
+
       {accessDenied ? (
         <section className="card">
           <div className="section-title">
@@ -310,7 +338,7 @@ export default function AdminUsersPage() {
       ) : (
         <>
 
-      <section className="card">
+      <section className="card" ref={formRef}>
         <div className="section-title">
           <h2>{form.id ? "Editar usuario" : "Nuevo usuario"}</h2>
           <span className={`badge ${isRealApi ? "confirmada" : "pendiente"}`}>{isRealApi ? "Supabase Admin activo" : "Modo local"}</span>
@@ -332,7 +360,6 @@ export default function AdminUsersPage() {
           <button className="btn" onClick={() => sendInvite()}><Mail size={16} /> Enviar invitacion por email</button>
           {form.id && <button className="btn" onClick={() => setForm(emptyForm())}>Limpiar</button>}
         </div>
-        {message && <p className="muted">{message}</p>}
         <p className="muted">Nuevo usuario crea el acceso en Supabase Auth con email confirmado y no envia correo automatico.</p>
       </section>
 
@@ -366,10 +393,10 @@ export default function AdminUsersPage() {
                 <td>{formatDate(user.last_sign_in_at)}</td>
                 <td>
                   <div className="toolbar">
-                    <button className="btn" onClick={() => editUser(user)}><UserCog size={16} /> Editar</button>
-                    <button className="btn danger" onClick={() => patchUser(user, { active: !user.active })}>{user.active ? "Desactivar" : "Activar"}</button>
-                    <button className="btn" onClick={() => resetPin(user)}>Resetear PIN</button>
-                    <button className="btn" onClick={() => sendInvite(user)}>Invitar</button>
+                    <button className="btn" title="Carga este usuario en el formulario superior para editarlo." onClick={() => editUser(user)}><UserCog size={16} /> Editar</button>
+                    <button className="btn danger" disabled={isLoading} title={user.active ? "Bloquea el acceso de este usuario." : "Reactiva el acceso de este usuario."} onClick={() => patchUser(user, { active: !user.active })}>{user.active ? "Desactivar" : "Activar"}</button>
+                    <button className="btn" disabled={isLoading} title="Genera un PIN temporal nuevo y lo muestra arriba." onClick={() => resetPin(user)}>Resetear PIN</button>
+                    <button className="btn" disabled={isLoading} title="Envia invitacion por Resend cuando RESEND_API_KEY y EMAIL_FROM esten configurados." onClick={() => sendInvite(user)}>Invitar</button>
                   </div>
                 </td>
               </tr>
