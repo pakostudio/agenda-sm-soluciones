@@ -14,6 +14,9 @@ if (!setupStatus.ok) {
   console.error(JSON.stringify(setupStatus.checks, null, 2));
   throw new Error("Production setup checks failed. Configure missing Vercel variables and apply Supabase SQL before retrying.");
 }
+if (!setupStatus.oauthOk) {
+  console.warn("Core app is ready. OAuth credentials for social networks are still pending.");
+}
 
 if (!email || !password) {
   console.log("Supabase setup is ready. Set ADMIN_EMAIL and ADMIN_PASSWORD to verify login.");

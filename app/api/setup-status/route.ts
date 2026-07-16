@@ -71,8 +71,11 @@ export async function GET() {
       detail: bucket.error?.message || (bucket.data?.public ? "public" : "private")
     };
 
-    const ok = Object.values(checks).every((check) => check.ok);
-    return NextResponse.json({ ok, checks });
+    const coreOk = Object.entries(checks)
+      .filter(([key]) => key !== "oauth")
+      .every(([, check]) => check.ok);
+    const oauthOk = checks.oauth.ok;
+    return NextResponse.json({ ok: coreOk, coreOk, oauthOk, checks });
   } catch (error) {
     checks.adminClient = {
       ok: false,
