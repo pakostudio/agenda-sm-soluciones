@@ -20,6 +20,7 @@ import {
   Save,
   Search,
   Settings,
+  Share2,
   Shield,
   Sparkles,
   Upload,
@@ -102,7 +103,20 @@ type ContentItem = {
   updated_at?: string;
 };
 
-type View = "dashboard" | "generator" | "calendar" | "library" | "brands" | "settings";
+type SocialConnection = {
+  id: string;
+  brand_id: string;
+  network: Network;
+  provider: "meta" | "linkedin" | "tiktok";
+  account_id: string;
+  account_name: string;
+  account_type: string;
+  scopes: string[];
+  status: string;
+  last_error: string | null;
+};
+
+type View = "dashboard" | "generator" | "calendar" | "library" | "brands" | "connections" | "settings";
 
 const nav: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -110,6 +124,7 @@ const nav: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
   { id: "calendar", label: "Calendario", icon: CalendarDays },
   { id: "library", label: "Biblioteca", icon: Library },
   { id: "brands", label: "Marcas", icon: Archive },
+  { id: "connections", label: "Redes", icon: Share2 },
   { id: "settings", label: "Ajustes", icon: Settings }
 ];
 
@@ -202,7 +217,9 @@ export default function SMContentStudio() {
   const [prompts, setPrompts] = useState<MasterPrompt[]>([]);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [items, setItems] = useState<ContentItem[]>([]);
+  const [connections, setConnections] = useState<SocialConnection[]>([]);
   const [selected, setSelected] = useState<ContentItem>(emptyContent);
+  const [selectedConnectionId, setSelectedConnectionId] = useState("");
   const [filters, setFilters] = useState({ q: "", brand: "all", network: "all", status: "all", date: "" });
   const [brandDraft, setBrandDraft] = useState<Partial<Brand>>({});
   const [promptDraft, setPromptDraft] = useState<Partial<MasterPrompt>>({});
@@ -257,6 +274,12 @@ export default function SMContentStudio() {
     setPrompts((promptsRes.data || []) as MasterPrompt[]);
     setAssets(signed);
     setItems((itemsRes.data || []) as ContentItem[]);
+    const token = session.data.session.access_token;
+    const connectionRes = await fetch("/api/social/connections", { headers: { Authorization: `Bearer ${token}` } });
+    if (connectionRes.ok) {
+      const connectionPayload = await connectionRes.json();
+      setConnections(connectionPayload.connections || []);
+    }
     const firstBrand = (brandsRes.data || [])[0] as Brand | undefined;
     setSelected((current) => ({
       ...current,
@@ -434,6 +457,56 @@ export default function SMContentStudio() {
     setNotice("Texto copiado.");
   };
 
+  const authHeaders = async () => {
+    const client = await getSupabaseBrowserClient();
+    const session = await client?.auth.getSession();
+    return {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${session?.data.session?.access_token || ""}`
+    };
+  };
+
+  const startOAuth = async (provider: "meta" | "linkedin" | "tiktok", brandId: string) => {
+    const response = await fetch(`/api/oauth/${provider}/start`, {
+      method: "POST",
+      headers: await authHeaders(),
+      body: JSON.stringify({ brand_id: brandId })
+    });
+    const payload = await response.json();
+    if (!response.ok) return setNotice(payload.error || "No fue posible iniciar OAuth.");
+    window.location.href = payload.url;
+  };
+
+  const publishNow = async () => {
+    if (!selected.id) return setNotice("Guarda el contenido antes de publicar.");
+    if (!selectedConnectionId) return setNotice("Elige una cuenta conectada.");
+    setBusy(true);
+    const response = await fetch("/api/social/publish", {
+      method: "POST",
+      headers: await authHeaders(),
+      body: JSON.stringify({ content_item_id: selected.id, social_connection_id: selectedConnectionId })
+    });
+    const payload = await response.json();
+    setNotice(response.ok ? "Publicado en la red conectada." : payload.error || "No fue posible publicar.");
+    await loadData();
+    setBusy(false);
+  };
+
+  const schedulePublish = async () => {
+    if (!selected.id) return setNotice("Guarda el contenido antes de programar.");
+    if (!selected.scheduled_at) return setNotice("Elige fecha de programación interna.");
+    if (!selectedConnectionId) return setNotice("Elige una cuenta conectada.");
+    setBusy(true);
+    const response = await fetch("/api/social/schedule", {
+      method: "POST",
+      headers: await authHeaders(),
+      body: JSON.stringify({ content_item_id: selected.id, social_connection_id: selectedConnectionId, run_at: selected.scheduled_at })
+    });
+    const payload = await response.json();
+    setNotice(response.ok ? "Publicación programada." : payload.error || "No fue posible programar.");
+    setBusy(false);
+  };
+
   const saveUser = async () => {
     const client = await getSupabaseBrowserClient();
     if (!client || user?.role !== "admin") return setNotice("Solo admin puede gestionar usuarios.");
@@ -548,12 +621,15 @@ export default function SMContentStudio() {
               <CopyField label="Guion de video" value={selected.video_script} setValue={(value) => setSelected({ ...selected, video_script: value })} copy={copy} />
               <CopyField label="Textos en pantalla" value={selected.on_screen_text} setValue={(value) => setSelected({ ...selected, on_screen_text: value })} copy={copy} />
               <label>Programación interna<input type="datetime-local" value={selected.scheduled_at || ""} onChange={(e) => setSelected({ ...selected, scheduled_at: e.target.value })} /></label>
+              <label>Cuenta conectada<select value={selectedConnectionId} onChange={(e) => setSelectedConnectionId(e.target.value)}><option value="">Elegir cuenta</option>{connections.filter((connection) => connection.brand_id === selected.brand_id && connection.network === selected.network && connection.status === "connected").map((connection) => <option key={connection.id} value={connection.id}>{connection.account_name} · {connection.provider}</option>)}</select></label>
               <MetricsEditor item={selected} setItem={setSelected} />
               <div className="actions sticky-actions">
                 <button className="btn" onClick={() => saveContent("draft")} disabled={busy}><Save size={18} />Guardar</button>
                 <button className="btn" onClick={() => saveContent("review")} disabled={busy}><Edit3 size={18} />Revisión</button>
                 <button className="btn success" onClick={() => saveContent("approved")} disabled={busy}><Check size={18} />Aprobar</button>
                 <button className="btn dark" onClick={() => saveContent("published")} disabled={busy}><BarChart3 size={18} />Publicado</button>
+                <button className="btn primary" onClick={publishNow} disabled={busy}><Share2 size={18} />Publicar ahora</button>
+                <button className="btn" onClick={schedulePublish} disabled={busy}><CalendarDays size={18} />Programar red</button>
               </div>
             </section>
           </div>
@@ -562,6 +638,7 @@ export default function SMContentStudio() {
         {view === "calendar" && <CalendarView items={filteredItems} brands={brands} onSelect={(item) => { setSelected({ ...emptyContent, ...item, scheduled_at: toInputDate(item.scheduled_at) }); setView("generator"); }} />}
         {view === "library" && <LibraryView assets={assets} brands={brands} onUpload={() => fileRef.current?.click()} />}
         {view === "brands" && <BrandsView brands={brands} prompts={prompts} brandDraft={brandDraft} setBrandDraft={setBrandDraft} saveBrand={saveBrand} promptDraft={promptDraft} setPromptDraft={setPromptDraft} savePrompt={savePrompt} />}
+        {view === "connections" && <ConnectionsView brands={brands} connections={connections} startOAuth={startOAuth} />}
         {view === "settings" && <SettingsView user={user} profiles={profiles} userDraft={userDraft} setUserDraft={setUserDraft} saveUser={saveUser} busy={busy} />}
       </section>
     </main>
@@ -606,6 +683,11 @@ function LibraryView({ assets, brands, onUpload }: { assets: Asset[]; brands: Br
 function BrandsView(props: { brands: Brand[]; prompts: MasterPrompt[]; brandDraft: Partial<Brand>; setBrandDraft: (value: Partial<Brand>) => void; saveBrand: () => void; promptDraft: Partial<MasterPrompt>; setPromptDraft: (value: Partial<MasterPrompt>) => void; savePrompt: () => void }) {
   const { brands, prompts, brandDraft, setBrandDraft, saveBrand, promptDraft, setPromptDraft, savePrompt } = props;
   return <div className="workspace"><section className="panel"><h2>Gestión de marcas</h2>{brands.map((brand) => <button key={brand.id} className="brand-card" onClick={() => setBrandDraft(brand)}><strong>{brand.name}</strong><span>{brand.networks.map((n) => networkLabels[n]).join(", ")}</span><small>{brand.editorial_profile}</small></button>)}<label>Nombre<input value={brandDraft.name || ""} onChange={(e) => setBrandDraft({ ...brandDraft, name: e.target.value })} /></label><label>Slug<input value={brandDraft.slug || ""} onChange={(e) => setBrandDraft({ ...brandDraft, slug: e.target.value })} /></label><label>Redes<select multiple value={brandDraft.networks || []} onChange={(e) => setBrandDraft({ ...brandDraft, networks: Array.from(e.target.selectedOptions).map((option) => option.value as Network) })}>{Object.entries(networkLabels).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label><label>Perfil editorial<textarea value={brandDraft.editorial_profile || ""} onChange={(e) => setBrandDraft({ ...brandDraft, editorial_profile: e.target.value })} /></label><label>Tono de voz<textarea value={brandDraft.voice_tone || ""} onChange={(e) => setBrandDraft({ ...brandDraft, voice_tone: e.target.value })} /></label><label>Audiencia<textarea value={brandDraft.audience || ""} onChange={(e) => setBrandDraft({ ...brandDraft, audience: e.target.value })} /></label><label>CTA base<textarea value={brandDraft.cta_style || ""} onChange={(e) => setBrandDraft({ ...brandDraft, cta_style: e.target.value })} /></label><button className="btn primary" onClick={saveBrand}><Save size={18} />Guardar marca</button></section><section className="panel"><h2>Prompts maestros</h2>{prompts.map((prompt) => <button key={prompt.id} className="brand-card" onClick={() => setPromptDraft(prompt)}><strong>{prompt.title}</strong><span>{brands.find((brand) => brand.id === prompt.brand_id)?.name} · {networkLabels[prompt.network]}</span></button>)}<label>Marca<select value={promptDraft.brand_id || ""} onChange={(e) => setPromptDraft({ ...promptDraft, brand_id: e.target.value })}><option value="">Elegir marca</option>{brands.map((brand) => <option key={brand.id} value={brand.id}>{brand.name}</option>)}</select></label><label>Red<select value={promptDraft.network || "instagram"} onChange={(e) => setPromptDraft({ ...promptDraft, network: e.target.value as Network })}>{Object.entries(networkLabels).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label><label>Título<input value={promptDraft.title || ""} onChange={(e) => setPromptDraft({ ...promptDraft, title: e.target.value })} /></label><label>Prompt<textarea value={promptDraft.prompt || ""} onChange={(e) => setPromptDraft({ ...promptDraft, prompt: e.target.value })} /></label><button className="btn primary" onClick={savePrompt}><Save size={18} />Guardar prompt</button></section></div>;
+}
+
+function ConnectionsView({ brands, connections, startOAuth }: { brands: Brand[]; connections: SocialConnection[]; startOAuth: (provider: "meta" | "linkedin" | "tiktok", brandId: string) => void }) {
+  const providerForNetwork = (network: Network) => network === "instagram" ? "meta" : network === "linkedin" ? "linkedin" : "tiktok";
+  return <section className="panel"><h2>Conectar redes sociales</h2><div className="asset-grid">{brands.map((brand) => <article key={brand.id}><strong>{brand.name}</strong><small>{brand.networks.map((network) => networkLabels[network]).join(", ")}</small>{brand.networks.map((network) => { const provider = providerForNetwork(network); const brandConnections = connections.filter((connection) => connection.brand_id === brand.id && connection.network === network); return <div className="connection-row" key={network}><span>{networkLabels[network]}</span><button className="btn" onClick={() => startOAuth(provider, brand.id)}><Share2 size={18} />Conectar {provider}</button>{brandConnections.map((connection) => <small key={connection.id}>{connection.account_name} · {connection.status}{connection.last_error ? ` · ${connection.last_error}` : ""}</small>)}</div>; })}</article>)}</div></section>;
 }
 
 function SettingsView(props: { user: Profile; profiles: Profile[]; userDraft: UserDraft; setUserDraft: (value: UserDraft) => void; saveUser: () => void; busy: boolean }) {

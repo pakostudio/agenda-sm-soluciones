@@ -19,7 +19,9 @@ Aplicación privada para administrar y producir contenido de GPC, SM Soluciones 
 - Buscador y filtros por marca, red, fecha y estado.
 - Registro de publicaciones y métricas manuales básicas.
 - RLS en tablas y Storage.
-- Arquitectura preparada para futuras APIs oficiales en `social_connections`.
+- OAuth oficial para Meta/Instagram, LinkedIn y TikTok.
+- Tokens cifrados server-side con AES-256-GCM.
+- Selección de cuenta conectada, publicación inmediata y programación por cron.
 
 ## Desarrollo local
 
@@ -37,6 +39,22 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 NEXT_PUBLIC_APP_URL=
 BOOTSTRAP_ADMIN_SECRET=
+OAUTH_ENCRYPTION_KEY=
+CRON_SECRET=
+META_APP_ID=
+META_APP_SECRET=
+LINKEDIN_CLIENT_ID=
+LINKEDIN_CLIENT_SECRET=
+TIKTOK_CLIENT_KEY=
+TIKTOK_CLIENT_SECRET=
+```
+
+Redirect URIs:
+
+```txt
+https://agenda-sm-soluciones-github.vercel.app/api/oauth/meta/callback
+https://agenda-sm-soluciones-github.vercel.app/api/oauth/linkedin/callback
+https://agenda-sm-soluciones-github.vercel.app/api/oauth/tiktok/callback
 ```
 
 ## Supabase
@@ -68,6 +86,14 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=... \
 SUPABASE_SERVICE_ROLE_KEY=... \
 NEXT_PUBLIC_APP_URL=https://agenda-sm-soluciones-github.vercel.app \
 BOOTSTRAP_ADMIN_SECRET=... \
+OAUTH_ENCRYPTION_KEY=... \
+CRON_SECRET=... \
+META_APP_ID=... \
+META_APP_SECRET=... \
+LINKEDIN_CLIENT_ID=... \
+LINKEDIN_CLIENT_SECRET=... \
+TIKTOK_CLIENT_KEY=... \
+TIKTOK_CLIENT_SECRET=... \
 node scripts/add-vercel-env.mjs
 ```
 
@@ -106,4 +132,43 @@ ADMIN_PASSWORD="contraseña-temporal" \
 node scripts/verify-production.mjs
 ```
 
-La app no integra todavía Meta, LinkedIn, TikTok, Canva, Metricool, Buffer, Cloudinary ni n8n. Funciona completa con publicación interna, copiado, descarga, Storage y registro manual de métricas.
+También puedes revisar el diagnóstico servidor:
+
+```bash
+curl https://agenda-sm-soluciones-github.vercel.app/api/setup-status
+```
+
+## Credenciales externas de redes sociales
+
+Meta / Instagram:
+
+- Crear Meta App y agregar Facebook Login.
+- Conectar Facebook Page con Instagram Professional Account.
+- Configurar redirect URI `/api/oauth/meta/callback`.
+- Solicitar permisos: `pages_show_list`, `pages_read_engagement`, `instagram_basic`, `instagram_content_publish`.
+- Variables: `META_APP_ID`, `META_APP_SECRET`.
+
+LinkedIn:
+
+- Crear LinkedIn Developer App.
+- Agregar OpenID Connect y Share on LinkedIn.
+- Configurar redirect URI `/api/oauth/linkedin/callback`.
+- Solicitar scopes: `openid`, `profile`, `w_member_social`, `r_organization_social`, `w_organization_social`.
+- Para publicar como página, el usuario OAuth debe tener rol autorizado en la organización.
+- Variables: `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`.
+
+TikTok:
+
+- Crear TikTok Developer App con Login Kit y Content Posting API.
+- Configurar redirect URI `/api/oauth/tiktok/callback`.
+- Solicitar scopes: `user.info.basic`, `video.publish`, `video.upload`.
+- Para publicación pública con Direct Post se requiere auditoría/aprobación de TikTok. Sin auditoría, TikTok restringe publicaciones a `SELF_ONLY`.
+- Variables: `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`.
+
+Seguridad:
+
+- `OAUTH_ENCRYPTION_KEY` debe tener al menos 32 caracteres y no debe rotarse sin migrar tokens.
+- `CRON_SECRET` protege `/api/cron/publish-due`.
+- Los tokens no se exponen al navegador; solo se listan cuentas sanitizadas desde `/api/social/connections`.
+
+La app no integra Canva, Metricool, Buffer, Cloudinary ni n8n. Funciona con publicación directa por APIs oficiales donde las plataformas otorguen permisos y aprobación.

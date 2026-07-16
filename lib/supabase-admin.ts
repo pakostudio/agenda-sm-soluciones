@@ -36,3 +36,24 @@ export const requireAdmin = async (authorization: string | null) => {
 
   return { admin, authUser: userData.user };
 };
+
+export const requireStaff = async (authorization: string | null) => {
+  const token = authorization?.replace("Bearer ", "");
+  if (!token) return { error: "Missing authorization token.", status: 401 as const };
+
+  const admin = getSupabaseAdmin();
+  const { data: userData, error: userError } = await admin.auth.getUser(token);
+  if (userError || !userData.user) return { error: "Invalid session.", status: 401 as const };
+
+  const { data: profile, error: profileError } = await admin
+    .from("profiles")
+    .select("id, role, active")
+    .eq("id", userData.user.id)
+    .single();
+
+  if (profileError || !profile?.active || !["admin", "editor"].includes(profile.role)) {
+    return { error: "Editor role required.", status: 403 as const };
+  }
+
+  return { admin, authUser: userData.user, profile };
+};

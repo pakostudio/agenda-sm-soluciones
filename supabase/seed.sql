@@ -34,8 +34,3 @@ insert into public.master_prompts (brand_id, network, title, prompt)
 select id, 'tiktok', 'LEM TikTok', 'Genera guion para TikTok con hook de 3 segundos, estructura por escenas, textos en pantalla, descripción, CTA y hashtags.'
 from public.brands where slug = 'lem'
 on conflict (brand_id, network) do update set title = excluded.title, prompt = excluded.prompt;
-
-insert into public.social_connections (brand_id, network, provider, status)
-select id, unnest(networks), 'official_api', 'not_connected'
-from public.brands
-on conflict (brand_id, network, provider) do nothing;

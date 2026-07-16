@@ -105,11 +105,37 @@ create table if not exists public.social_connections (
   brand_id uuid not null references public.brands(id) on delete cascade,
   network social_network not null,
   provider text not null,
+  account_id text,
+  account_name text,
+  account_type text,
+  access_token_encrypted text,
+  refresh_token_encrypted text,
+  token_expires_at timestamptz,
+  refresh_expires_at timestamptz,
+  scopes text[] not null default '{}',
   status text not null default 'not_connected',
   metadata jsonb not null default '{}'::jsonb,
+  last_error text,
+  connected_by uuid references public.profiles(id),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique (brand_id, network, provider)
+  unique (brand_id, network, provider, account_id)
+);
+
+create table if not exists public.publish_jobs (
+  id uuid primary key default gen_random_uuid(),
+  content_item_id uuid not null references public.content_items(id) on delete cascade,
+  social_connection_id uuid not null references public.social_connections(id) on delete cascade,
+  run_at timestamptz not null,
+  status text not null default 'scheduled',
+  provider_post_id text,
+  provider_response jsonb not null default '{}'::jsonb,
+  attempts integer not null default 0,
+  last_error text,
+  created_by uuid references public.profiles(id),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (content_item_id, social_connection_id)
 );
 
 create or replace function public.touch_updated_at()
@@ -128,6 +154,10 @@ drop trigger if exists touch_master_prompts on public.master_prompts;
 create trigger touch_master_prompts before update on public.master_prompts for each row execute function public.touch_updated_at();
 drop trigger if exists touch_content_items on public.content_items;
 create trigger touch_content_items before update on public.content_items for each row execute function public.touch_updated_at();
+drop trigger if exists touch_social_connections on public.social_connections;
+create trigger touch_social_connections before update on public.social_connections for each row execute function public.touch_updated_at();
+drop trigger if exists touch_publish_jobs on public.publish_jobs;
+create trigger touch_publish_jobs before update on public.publish_jobs for each row execute function public.touch_updated_at();
 
 create or replace function public.current_role()
 returns user_role language sql stable security definer set search_path = public as $$
@@ -141,6 +171,7 @@ alter table public.media_assets enable row level security;
 alter table public.content_items enable row level security;
 alter table public.content_history enable row level security;
 alter table public.social_connections enable row level security;
+alter table public.publish_jobs enable row level security;
 
 drop policy if exists profiles_read on public.profiles;
 create policy profiles_read on public.profiles for select using (public.current_role() is not null);
@@ -173,9 +204,16 @@ drop policy if exists history_insert on public.content_history;
 create policy history_insert on public.content_history for insert with check (public.current_role() in ('admin','editor'));
 
 drop policy if exists social_read on public.social_connections;
-create policy social_read on public.social_connections for select using (public.current_role() is not null);
+create policy social_read on public.social_connections for select using (public.current_role() = 'admin');
 drop policy if exists social_admin on public.social_connections;
 create policy social_admin on public.social_connections for all using (public.current_role() = 'admin') with check (public.current_role() = 'admin');
+
+revoke all on public.social_connections from anon, authenticated;
+
+drop policy if exists jobs_read on public.publish_jobs;
+create policy jobs_read on public.publish_jobs for select using (public.current_role() is not null);
+drop policy if exists jobs_edit on public.publish_jobs;
+create policy jobs_edit on public.publish_jobs for all using (public.current_role() in ('admin','editor')) with check (public.current_role() in ('admin','editor'));
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values ('content-media', 'content-media', false, 83886080, array['image/jpeg','image/png','image/webp','image/gif','video/mp4','video/quicktime','video/webm'])

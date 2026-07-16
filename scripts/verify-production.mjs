@@ -9,8 +9,14 @@ if (!publicConfig.supabase?.configured) {
   throw new Error("Supabase is not configured in production.");
 }
 
+const setupStatus = await fetch(`${base}/api/setup-status`).then((res) => res.json());
+if (!setupStatus.ok) {
+  console.error(JSON.stringify(setupStatus.checks, null, 2));
+  throw new Error("Production setup checks failed.");
+}
+
 if (!email || !password) {
-  console.log("Public config is ready. Set ADMIN_EMAIL and ADMIN_PASSWORD to verify login.");
+  console.log("Supabase setup is ready. Set ADMIN_EMAIL and ADMIN_PASSWORD to verify login.");
   process.exit(0);
 }
 
