@@ -1,385 +1,456 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import Image from "next/image";
-import FullCalendar from "@fullcalendar/react";
-import dayGridPlugin from "@fullcalendar/daygrid";
-import timeGridPlugin from "@fullcalendar/timegrid";
-import listPlugin from "@fullcalendar/list";
-import interactionPlugin from "@fullcalendar/interaction";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Bell,
+  Archive,
+  BarChart3,
   CalendarDays,
-  CheckCircle2,
-  Clock,
+  Check,
+  Clipboard,
+  Download,
+  Edit3,
+  FileVideo,
+  Filter,
+  Image as ImageIcon,
   LayoutDashboard,
+  Library,
+  Loader2,
   LogOut,
   Plus,
+  Save,
   Search,
-  Shield,
   Settings,
-  Users,
-  XCircle
+  Shield,
+  Sparkles,
+  Upload,
+  Users
 } from "lucide-react";
-import { findAvailableSlots } from "@/lib/availability";
-import {
-  demoAppointments,
-  demoBlocks,
-  demoClients,
-  demoContacts,
-  demoNotifications,
-  demoProfiles,
-  demoProjects,
-  demoWorkingHours
-} from "@/lib/demo-data";
 import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase";
-import type { Appointment, AppointmentModality, AppointmentStatus, AppointmentType, AvailabilitySlot, Client, Contact, GoogleAvailability, Profile, Project, WorkingHour } from "@/lib/types";
 
-type View = "dashboard" | "calendar" | "agenda" | "availability" | "clients" | "notifications" | "settings";
+type Role = "admin" | "editor" | "viewer";
+type Network = "instagram" | "linkedin" | "tiktok";
+type PostStatus = "draft" | "review" | "approved" | "published";
+type AssetType = "image" | "video";
 
-const navItems: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
-  { id: "dashboard", label: "Inicio", icon: LayoutDashboard },
+type Profile = {
+  id: string;
+  full_name: string;
+  email: string;
+  role: Role;
+  active: boolean;
+};
+
+type Brand = {
+  id: string;
+  name: string;
+  slug: string;
+  networks: Network[];
+  editorial_profile: string;
+  voice_tone: string;
+  audience: string;
+  cta_style: string;
+  active: boolean;
+};
+
+type MasterPrompt = {
+  id: string;
+  brand_id: string;
+  network: Network;
+  title: string;
+  prompt: string;
+};
+
+type Asset = {
+  id: string;
+  brand_id: string;
+  title: string;
+  asset_type: AssetType;
+  storage_path: string;
+  file_name: string;
+  mime_type: string;
+  file_size: number;
+  public_url?: string;
+  notes: string | null;
+};
+
+type ContentItem = {
+  id: string;
+  brand_id: string;
+  network: Network;
+  topic: string;
+  asset_id: string | null;
+  status: PostStatus;
+  scheduled_at: string | null;
+  published_at: string | null;
+  copy_text: string;
+  hashtags: string;
+  cta: string;
+  video_script: string;
+  on_screen_text: string;
+  title: string;
+  description: string;
+  manual_metrics: Record<string, number>;
+  updated_at?: string;
+};
+
+type View = "dashboard" | "generator" | "calendar" | "library" | "brands" | "settings";
+
+const nav: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
+  { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { id: "generator", label: "Generador", icon: Sparkles },
   { id: "calendar", label: "Calendario", icon: CalendarDays },
-  { id: "availability", label: "Buscar horario", icon: Search },
-  { id: "clients", label: "Clientes", icon: Users },
-  { id: "settings", label: "Config", icon: Settings }
+  { id: "library", label: "Biblioteca", icon: Library },
+  { id: "brands", label: "Marcas", icon: Archive },
+  { id: "settings", label: "Ajustes", icon: Settings }
 ];
 
-const fmtDateTime = (value: string) =>
-  new Intl.DateTimeFormat("es-MX", {
-    dateStyle: "medium",
-    timeStyle: "short",
-    timeZone: "America/Mexico_City"
-  }).format(new Date(value));
+const statusLabels: Record<PostStatus, string> = {
+  draft: "Borrador",
+  review: "Revisión",
+  approved: "Aprobado",
+  published: "Publicado"
+};
 
-const toInputDateTime = (value: string) => {
+const networkLabels: Record<Network, string> = {
+  instagram: "Instagram",
+  linkedin: "LinkedIn",
+  tiktok: "TikTok"
+};
+
+const maxBytes = {
+  image: 10 * 1024 * 1024,
+  video: 80 * 1024 * 1024
+};
+
+const emptyContent: ContentItem = {
+  id: "",
+  brand_id: "",
+  network: "instagram",
+  topic: "",
+  asset_id: null,
+  status: "draft",
+  scheduled_at: "",
+  published_at: "",
+  copy_text: "",
+  hashtags: "",
+  cta: "",
+  video_script: "",
+  on_screen_text: "",
+  title: "",
+  description: "",
+  manual_metrics: { impressions: 0, reach: 0, clicks: 0, likes: 0, comments: 0, shares: 0 }
+};
+
+const formatDate = (value?: string | null) => {
+  if (!value) return "Sin fecha";
+  return new Intl.DateTimeFormat("es-MX", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+};
+
+const toInputDate = (value?: string | null) => {
+  if (!value) return "";
   const date = new Date(value);
   date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
   return date.toISOString().slice(0, 16);
 };
 
-const todayKey = () => new Date().toISOString().slice(0, 10);
-
-const blankAppointment = (userId: string): Appointment => {
-  const start = new Date();
-  start.setHours(start.getHours() + 1, 0, 0, 0);
-  const end = new Date(start);
-  end.setMinutes(end.getMinutes() + 60);
-
+const generateDraft = (brand: Brand, network: Network, topic: string, prompt?: MasterPrompt) => {
+  const net = networkLabels[network];
+  const isVideo = network === "tiktok" || network === "instagram";
+  const base = prompt?.prompt || "Crea contenido claro, útil y accionable.";
+  const audience = brand.audience || "clientes potenciales";
+  const tone = brand.voice_tone || "profesional, directo y cercano";
+  const title = `${topic} | ${brand.name}`;
+  const cta = brand.cta_style || "Agenda una llamada y hablemos de tu siguiente paso.";
   return {
-    id: `local-${crypto.randomUUID()}`,
-    title: "",
-    client_id: null,
-    project_id: null,
-    contact_id: null,
-    responsible_user_id: userId,
-    participant_ids: [userId],
-    start_at: start.toISOString(),
-    end_at: end.toISOString(),
-    duration_minutes: 60,
-    type: "junta",
-    modality: "videollamada",
-    location_or_link: "",
-    status: "pendiente",
-    notes: "",
-    next_action: "",
-    next_action_due_at: ""
+    title,
+    description: `${brand.name} para ${audience}. Enfoque ${net}: ${topic}.`,
+    copy_text: `${topic}\n\nPara ${audience}, el punto clave es convertir la idea en una acción concreta. ${brand.name} lo comunica con un tono ${tone}: primero claridad, luego valor, después el siguiente paso.\n\n${base}`,
+    hashtags:
+      network === "linkedin"
+        ? "#Estrategia #Negocios #Marketing #Crecimiento"
+        : "#Contenido #MarketingDigital #Marca #Estrategia",
+    cta,
+    video_script: isVideo
+      ? `Hook (0-3s): ${topic} sin complicarlo.\nDesarrollo (4-20s): Explica el problema, muestra el material seleccionado y aterriza una recomendación práctica.\nCierre (21-30s): Refuerza el beneficio y termina con: ${cta}`
+      : "",
+    on_screen_text: isVideo
+      ? `1. ${topic}\n2. Lo que debes saber\n3. Acción recomendada\n4. ${brand.name}`
+      : ""
   };
 };
 
-export default function AgendaSMApp() {
-  const [sessionEmail, setSessionEmail] = useState("");
-  const [pin, setPin] = useState("");
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [activeUser, setActiveUser] = useState<Profile>(demoProfiles[0]);
-  const [profiles, setProfiles] = useState<Profile[]>(isSupabaseConfigured ? [] : demoProfiles);
-  const [workingHours, setWorkingHours] = useState<WorkingHour[]>(isSupabaseConfigured ? [] : demoWorkingHours);
-  const [clients, setClients] = useState<Client[]>(isSupabaseConfigured ? [] : demoClients);
-  const [projects, setProjects] = useState<Project[]>(isSupabaseConfigured ? [] : demoProjects);
-  const [contacts, setContacts] = useState<Contact[]>(isSupabaseConfigured ? [] : demoContacts);
+export default function SMContentStudio() {
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [user, setUser] = useState<Profile | null>(null);
   const [view, setView] = useState<View>("dashboard");
-  const [appointments, setAppointments] = useState<Appointment[]>(isSupabaseConfigured ? [] : demoAppointments);
-  const [selected, setSelected] = useState<Appointment | null>(null);
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [memberFilter, setMemberFilter] = useState("all");
-  const [availabilityParticipants, setAvailabilityParticipants] = useState<string[]>(["u-pako", "u-billy"]);
-  const [duration, setDuration] = useState(60);
-  const [rangeStart, setRangeStart] = useState(`${todayKey()}T09:00`);
-  const [rangeEnd, setRangeEnd] = useState(`${todayKey()}T18:00`);
-  const [googleWarning, setGoogleWarning] = useState("");
-  const [googleAvailability, setGoogleAvailability] = useState<GoogleAvailability>({});
-  const [createMeet, setCreateMeet] = useState(false);
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [brands, setBrands] = useState<Brand[]>([]);
+  const [prompts, setPrompts] = useState<MasterPrompt[]>([]);
+  const [assets, setAssets] = useState<Asset[]>([]);
+  const [items, setItems] = useState<ContentItem[]>([]);
+  const [selected, setSelected] = useState<ContentItem>(emptyContent);
+  const [filters, setFilters] = useState({ q: "", brand: "all", network: "all", status: "all", date: "" });
+  const [brandDraft, setBrandDraft] = useState<Partial<Brand>>({});
+  const [promptDraft, setPromptDraft] = useState<Partial<MasterPrompt>>({});
 
-  const loadAppData = async (profile: Profile) => {
+  const clientReady = isSupabaseConfigured;
+  const selectedBrand = brands.find((brand) => brand.id === selected.brand_id) || brands[0];
+  const brandAssets = assets.filter((asset) => asset.brand_id === selected.brand_id);
+
+  const loadData = async () => {
     const client = await getSupabaseBrowserClient();
-    if (!client) return;
-    const [profileRows, appointmentRows, participantRows, hoursRows, clientRows, projectRows, contactRows] = await Promise.all([
-      client.from("profiles").select("id, full_name, primary_email, role, color, active, last_sign_in_at, must_change_password").eq("active", true).order("full_name"),
-      client.from("appointments").select("*").order("start_at", { ascending: true }),
-      client.from("appointment_participants").select("appointment_id, user_id"),
-      client.from("working_hours").select("id, user_id, day_of_week, start_time, end_time, is_active"),
-      client.from("clients").select("id, name, status, notes").order("name"),
-      client.from("projects").select("id, client_id, name, status").order("name"),
-      client.from("contacts").select("id, client_id, name, email, phone, position").order("name")
+    if (!client) {
+      setLoading(false);
+      return;
+    }
+
+    const session = await client.auth.getSession();
+    if (!session.data.session?.user) {
+      setUser(null);
+      setLoading(false);
+      return;
+    }
+
+    const authUser = session.data.session.user;
+    const [profileRes, profilesRes, brandsRes, promptsRes, assetsRes, itemsRes] = await Promise.all([
+      client.from("profiles").select("*").eq("id", authUser.id).single(),
+      client.from("profiles").select("*").order("full_name"),
+      client.from("brands").select("*").order("name"),
+      client.from("master_prompts").select("*").order("network"),
+      client.from("media_assets").select("*").order("created_at", { ascending: false }),
+      client.from("content_items").select("*").order("updated_at", { ascending: false })
     ]);
 
-    const loadedProfiles = (profileRows.data as Profile[] | null) || [profile];
-    const participantsByAppointment = new Map<string, string[]>();
-    (participantRows.data || []).forEach((item) => {
-      participantsByAppointment.set(item.appointment_id, [...(participantsByAppointment.get(item.appointment_id) || []), item.user_id]);
-    });
-    const loadedAppointments = (appointmentRows.data || []).map((item) => ({
-      ...item,
-      participant_ids: participantsByAppointment.get(item.id) || [item.responsible_user_id]
-    })) as Appointment[];
+    if (profileRes.error || !profileRes.data?.active) {
+      await client.auth.signOut();
+      setNotice("Tu usuario no tiene un perfil activo.");
+      setUser(null);
+      setLoading(false);
+      return;
+    }
 
-    setProfiles(loadedProfiles);
-    setWorkingHours((hoursRows.data as WorkingHour[] | null) || []);
-    setAppointments(loadedAppointments);
-    setClients((clientRows.data as Client[] | null) || []);
-    setProjects((projectRows.data as Project[] | null) || []);
-    setContacts((contactRows.data as Contact[] | null) || []);
-    setAvailabilityParticipants((current) => current.filter((id) => loadedProfiles.some((item) => item.id === id)).length ? current.filter((id) => loadedProfiles.some((item) => item.id === id)) : [profile.id]);
+    const signed = await Promise.all(
+      ((assetsRes.data || []) as Asset[]).map(async (asset) => {
+        const { data } = await client.storage.from("content-media").createSignedUrl(asset.storage_path, 3600);
+        return { ...asset, public_url: data?.signedUrl };
+      })
+    );
+
+    setUser(profileRes.data as Profile);
+    setProfiles((profilesRes.data || []) as Profile[]);
+    setBrands((brandsRes.data || []) as Brand[]);
+    setPrompts((promptsRes.data || []) as MasterPrompt[]);
+    setAssets(signed);
+    setItems((itemsRes.data || []) as ContentItem[]);
+    const firstBrand = (brandsRes.data || [])[0] as Brand | undefined;
+    setSelected((current) => ({
+      ...current,
+      brand_id: current.brand_id || firstBrand?.id || "",
+      network: firstBrand?.networks?.[0] || "instagram"
+    }));
+    setLoading(false);
   };
 
   useEffect(() => {
-    const restoreSession = async () => {
-      const client = await getSupabaseBrowserClient();
-      if (!client) return;
-      const { data } = await client.auth.getSession();
-      const session = data.session;
-      const email = session?.user.email;
-      if (email) {
-        const { data: profile } = await client.from("profiles").select("id, full_name, primary_email, role, color, active, last_sign_in_at, must_change_password").eq("id", session.user.id).single();
-        if (profile?.active === false) {
-          await client.auth.signOut();
-          return;
-        }
-        if (profile) {
-          setActiveUser(profile as Profile);
-          await loadAppData(profile as Profile);
-        }
-        setSessionEmail(email);
-        setIsAuthenticated(true);
-      }
-    };
-    restoreSession();
+    loadData();
   }, []);
 
-  const visibleAppointments = useMemo(() => {
-    if (activeUser.role === "admin" && memberFilter === "all") return appointments;
-    const userId = memberFilter === "all" ? activeUser.id : memberFilter;
-    return appointments.filter((appointment) => appointment.responsible_user_id === userId || appointment.participant_ids.includes(userId));
-  }, [activeUser, appointments, memberFilter]);
+  const filteredItems = useMemo(() => {
+    return items.filter((item) => {
+      const text = `${item.topic} ${item.title} ${item.copy_text}`.toLowerCase();
+      return (
+        (!filters.q || text.includes(filters.q.toLowerCase())) &&
+        (filters.brand === "all" || item.brand_id === filters.brand) &&
+        (filters.network === "all" || item.network === filters.network) &&
+        (filters.status === "all" || item.status === filters.status) &&
+        (!filters.date || item.scheduled_at?.slice(0, 10) === filters.date)
+      );
+    });
+  }, [filters, items]);
 
-  const dashboard = useMemo(() => {
-    const now = new Date();
-    const today = todayKey();
-    const active = visibleAppointments.filter((item) => item.status !== "cancelada");
-    return {
-      today: active.filter((item) => item.start_at.slice(0, 10) === today),
-      upcoming: active.filter((item) => new Date(item.start_at) > now).slice(0, 6),
-      pendingFollowups: active.filter((item) => item.next_action && item.next_action_due_at && new Date(item.next_action_due_at) >= now),
-      overdue: active.filter((item) => item.status !== "realizada" && new Date(item.end_at) < now)
-    };
-  }, [visibleAppointments]);
-
-  const availability = useMemo(
-    () =>
-      findAvailableSlots({
-        participantIds: availabilityParticipants,
-        durationMinutes: duration,
-        rangeStart: new Date(rangeStart).toISOString(),
-        rangeEnd: new Date(rangeEnd).toISOString(),
-        workdayStart: "09:00",
-        workdayEnd: "18:00",
-        appointments,
-        workingHours,
-        blocks: isSupabaseConfigured ? [] : demoBlocks,
-        googleAvailability,
-        stepMinutes: 30
-      }).slice(0, 24),
-    [appointments, availabilityParticipants, duration, googleAvailability, rangeEnd, rangeStart, workingHours]
+  const stats = useMemo(
+    () => ({
+      draft: items.filter((item) => item.status === "draft").length,
+      review: items.filter((item) => item.status === "review").length,
+      approved: items.filter((item) => item.status === "approved").length,
+      published: items.filter((item) => item.status === "published").length
+    }),
+    [items]
   );
 
-  const login = async () => {
+  const signIn = async () => {
+    setBusy(true);
+    setNotice("");
     const client = await getSupabaseBrowserClient();
-    if (client && isSupabaseConfigured && sessionEmail && pin) {
-      const { data, error } = await client.auth.signInWithPassword({ email: sessionEmail, password: pin });
-      if (error) alert("PIN incorrecto o usuario no registrado.");
-      if (!error && data.user) {
-        const { data: profile, error: profileError } = await client
-          .from("profiles")
-          .select("id, full_name, primary_email, role, color, active, last_sign_in_at, must_change_password")
-          .eq("id", data.user.id)
-          .single();
-        if (profileError || !profile) {
-          alert("No existe perfil activo para este usuario.");
-          await client.auth.signOut();
-          return;
-        }
-        if (!profile.active) {
-          alert("Este usuario esta inactivo. Contacta al administrador.");
-          await client.auth.signOut();
-          return;
-        }
-        await client.from("profiles").update({ last_sign_in_at: new Date().toISOString() }).eq("id", data.user.id);
-        setActiveUser(profile as Profile);
-        await loadAppData(profile as Profile);
-        setIsAuthenticated(true);
-      }
+    if (!client) return setBusy(false);
+    const { error } = await client.auth.signInWithPassword({ email, password });
+    if (error) {
+      setNotice("No fue posible iniciar sesión. Revisa correo y contraseña.");
+      setBusy(false);
       return;
     }
-
-    const matched = demoProfiles.find((profile) => profile.primary_email.toLowerCase() === sessionEmail.toLowerCase()) || demoProfiles[0];
-    setActiveUser(matched);
-    setIsAuthenticated(true);
+    await loadData();
+    setBusy(false);
   };
 
-  const saveAppointment = async (appointment: Appointment) => {
-    const start = new Date(appointment.start_at);
-    const end = new Date(appointment.end_at);
-    if (!appointment.title.trim()) {
-      alert("Agrega un titulo para la cita.");
-      return;
-    }
-    if (end <= start) {
-      alert("La hora fin debe ser posterior a la hora inicio.");
-      return;
-    }
+  const signOut = async () => {
+    const client = await getSupabaseBrowserClient();
+    await client?.auth.signOut();
+    setUser(null);
+  };
 
-    let normalized: Appointment = {
-      ...appointment,
-      duration_minutes: Math.round((end.getTime() - start.getTime()) / 60_000),
-      updated_by: activeUser.id
+  const saveContent = async (nextStatus?: PostStatus) => {
+    const client = await getSupabaseBrowserClient();
+    if (!client || !user || !selectedBrand) return;
+    if (!selected.topic.trim()) return setNotice("Escribe un tema para guardar el contenido.");
+    setBusy(true);
+    const payload = {
+      brand_id: selected.brand_id,
+      network: selected.network,
+      topic: selected.topic.trim(),
+      asset_id: selected.asset_id || null,
+      status: nextStatus || selected.status,
+      scheduled_at: selected.scheduled_at || null,
+      published_at: nextStatus === "published" ? new Date().toISOString() : selected.published_at || null,
+      copy_text: selected.copy_text,
+      hashtags: selected.hashtags,
+      cta: selected.cta,
+      video_script: selected.video_script,
+      on_screen_text: selected.on_screen_text,
+      title: selected.title,
+      description: selected.description,
+      manual_metrics: selected.manual_metrics || {},
+      updated_by: user.id
     };
 
+    const result = selected.id
+      ? await client.from("content_items").update(payload).eq("id", selected.id).select("*").single()
+      : await client.from("content_items").insert(payload).select("*").single();
+
+    if (result.error) {
+      setNotice(result.error.message);
+    } else {
+      const saved = result.data as ContentItem;
+      await client.from("content_history").insert({
+        content_item_id: saved.id,
+        changed_by: user.id,
+        change_type: selected.id ? "update" : "create",
+        snapshot: saved
+      });
+      setSelected(saved);
+      setNotice("Contenido guardado.");
+      await loadData();
+    }
+    setBusy(false);
+  };
+
+  const generateContent = () => {
+    if (!selectedBrand || !selected.topic.trim()) return setNotice("Elige marca y escribe un tema.");
+    const prompt = prompts.find((item) => item.brand_id === selectedBrand.id && item.network === selected.network);
+    setSelected((current) => ({ ...current, ...generateDraft(selectedBrand, current.network, current.topic, prompt) }));
+    setNotice("Contenido generado y listo para edición manual.");
+  };
+
+  const uploadAsset = async (file: File) => {
     const client = await getSupabaseBrowserClient();
-    if (client && isSupabaseConfigured) {
-      const isNew = normalized.id.startsWith("local-");
-      let meetData: { meet_url?: string | null; google_event_id?: string | null } = {};
-      if (createMeet) {
-        const { data } = await client.auth.getSession();
-        const token = data.session?.access_token;
-        if (token) {
-          const response = await fetch("/api/google/create-meet", {
-            method: "POST",
-            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-            body: JSON.stringify({
-              responsible_user_id: normalized.responsible_user_id,
-              title: normalized.title,
-              start_at: normalized.start_at,
-              end_at: normalized.end_at,
-              notes: normalized.notes
-            })
-          });
-          const payload = await response.json();
-          if (response.ok) meetData = payload;
-          else alert(payload.error || "La cita se creo, pero no se pudo generar Meet.");
-        }
-      }
-
-      const dbPayload = {
-        title: normalized.title,
-        client_id: normalized.client_id || null,
-        project_id: normalized.project_id || null,
-        contact_id: normalized.contact_id || null,
-        responsible_user_id: normalized.responsible_user_id,
-        start_at: normalized.start_at,
-        end_at: normalized.end_at,
-        duration_minutes: normalized.duration_minutes,
-        type: normalized.type,
-        modality: normalized.modality,
-        location_or_link: meetData.meet_url || normalized.location_or_link || null,
-        meet_url: meetData.meet_url || normalized.meet_url || null,
-        google_event_id: meetData.google_event_id || normalized.google_event_id || null,
-        status: normalized.status,
-        notes: normalized.notes || null,
-        next_action: normalized.next_action || null,
-        next_action_due_at: normalized.next_action_due_at || null,
-        updated_by: activeUser.id,
-        ...(isNew ? { created_by: activeUser.id } : {})
-      };
-
-      const result = isNew
-        ? await client.from("appointments").insert(dbPayload).select("*").single()
-        : await client.from("appointments").update(dbPayload).eq("id", normalized.id).select("*").single();
-      if (result.error || !result.data) {
-        alert(result.error?.message || "No se pudo guardar la cita.");
-        return;
-      }
-
-      await client.from("appointment_participants").delete().eq("appointment_id", result.data.id);
-      const participantIds = Array.from(new Set([normalized.responsible_user_id, ...normalized.participant_ids]));
-      if (participantIds.length) {
-        await client.from("appointment_participants").insert(participantIds.map((userId) => ({ appointment_id: result.data.id, user_id: userId })));
-      }
-      normalized = { ...(result.data as Appointment), participant_ids: participantIds, updated_by: activeUser.id };
+    if (!client || !selectedBrand || !user) return;
+    const type: AssetType = file.type.startsWith("video/") ? "video" : "image";
+    if (!file.type.startsWith("image/") && !file.type.startsWith("video/")) return setNotice("Solo se aceptan imágenes o videos.");
+    if (file.size > maxBytes[type]) return setNotice(`El archivo supera el límite de ${type === "image" ? "10 MB" : "80 MB"}.`);
+    setBusy(true);
+    const path = `${selectedBrand.slug}/${crypto.randomUUID()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "-")}`;
+    const upload = await client.storage.from("content-media").upload(path, file, { upsert: false, contentType: file.type });
+    if (upload.error) {
+      setNotice(upload.error.message);
+      setBusy(false);
+      return;
     }
-
-    setAppointments((current) => {
-      const exists = current.some((item) => item.id === normalized.id);
-      return exists ? current.map((item) => (item.id === normalized.id ? normalized : item)) : [normalized, ...current];
+    const saved = await client.from("media_assets").insert({
+      brand_id: selectedBrand.id,
+      uploaded_by: user.id,
+      title: file.name,
+      asset_type: type,
+      storage_path: path,
+      file_name: file.name,
+      mime_type: file.type,
+      file_size: file.size
     });
-    setCreateMeet(false);
-    setIsModalOpen(false);
+    setNotice(saved.error ? saved.error.message : "Archivo subido a Supabase Storage.");
+    await loadData();
+    setBusy(false);
   };
 
-  const changeStatus = (appointment: Appointment, status: AppointmentStatus) => {
-    saveAppointment({ ...appointment, status, updated_by: activeUser.id });
-  };
-
-  const openNew = (slot?: AvailabilitySlot) => {
-    const appointment = blankAppointment(activeUser.id);
-    if (slot) {
-      appointment.start_at = slot.start;
-      appointment.end_at = slot.end;
-      appointment.duration_minutes = duration;
-      appointment.participant_ids = availabilityParticipants;
-      appointment.responsible_user_id = availabilityParticipants[0] || activeUser.id;
-    }
-    setSelected(appointment);
-    setIsModalOpen(true);
-  };
-
-  const testGoogleFreeBusy = async () => {
-    setGoogleWarning("");
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const saveBrand = async () => {
     const client = await getSupabaseBrowserClient();
-    if (client) {
-      const { data } = await client.auth.getSession();
-      if (data.session?.access_token) headers.Authorization = `Bearer ${data.session.access_token}`;
-    }
-    const response = await fetch("/api/google/freebusy", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ timeMin: new Date(rangeStart).toISOString(), timeMax: new Date(rangeEnd).toISOString(), userIds: availabilityParticipants })
-    });
-    const data = await response.json();
-    if (data.users) setGoogleAvailability(data.users);
-    setGoogleWarning(data.warning || (response.ok ? "Google Free/Busy consultado." : data.error || "No se pudo consultar Google Free/Busy."));
+    if (!client || !user || user.role === "viewer") return;
+    if (!brandDraft.name || !brandDraft.slug) return setNotice("Nombre y slug son obligatorios.");
+    const payload = {
+      name: brandDraft.name,
+      slug: brandDraft.slug,
+      networks: brandDraft.networks || ["instagram"],
+      editorial_profile: brandDraft.editorial_profile || "",
+      voice_tone: brandDraft.voice_tone || "",
+      audience: brandDraft.audience || "",
+      cta_style: brandDraft.cta_style || "",
+      active: true
+    };
+    const result = brandDraft.id
+      ? await client.from("brands").update(payload).eq("id", brandDraft.id)
+      : await client.from("brands").insert(payload);
+    setNotice(result.error ? result.error.message : "Marca guardada.");
+    setBrandDraft({});
+    await loadData();
   };
 
-  if (!isAuthenticated) {
+  const savePrompt = async () => {
+    const client = await getSupabaseBrowserClient();
+    if (!client || !user || user.role === "viewer") return;
+    if (!promptDraft.brand_id || !promptDraft.network || !promptDraft.prompt) return setNotice("Completa marca, red y prompt.");
+    const result = promptDraft.id
+      ? await client.from("master_prompts").update(promptDraft).eq("id", promptDraft.id)
+      : await client.from("master_prompts").insert(promptDraft);
+    setNotice(result.error ? result.error.message : "Prompt guardado.");
+    setPromptDraft({});
+    await loadData();
+  };
+
+  const copy = async (text: string) => {
+    await navigator.clipboard.writeText(text || "");
+    setNotice("Texto copiado.");
+  };
+
+  if (!clientReady) {
     return (
       <main className="login-page">
         <section className="login-panel">
-          <Image className="login-logo" src="/logo-sm-soluciones.png" width={420} height={220} alt="SM Soluciones" priority />
-          <h1>Agenda SM</h1>
-          <p className="muted">Agenda privada para citas, disponibilidad y seguimiento del equipo.</p>
-          <div className="grid" style={{ marginTop: 22 }}>
-            <div className="field">
-              <label>Email</label>
-              <input value={sessionEmail} onChange={(event) => setSessionEmail(event.target.value)} placeholder="pako@smsoluciones.com" />
-            </div>
-            <div className="field">
-              <label>PIN individual</label>
-              <input value={pin} onChange={(event) => setPin(event.target.value)} type="password" inputMode="numeric" placeholder="PIN" />
-            </div>
-            <button className="btn primary" onClick={login}>
-              Entrar
-            </button>
-          </div>
+          <Shield size={34} />
+          <h1>SM Content Studio</h1>
+          <p>Configura Supabase para activar login, base de datos, Storage y RLS. Esta app no usa datos simulados.</p>
+        </section>
+      </main>
+    );
+  }
+
+  if (loading) {
+    return <main className="loading"><Loader2 className="spin" /> Cargando SM Content Studio...</main>;
+  }
+
+  if (!user) {
+    return (
+      <main className="login-page">
+        <section className="login-panel">
+          <div className="mark">SM</div>
+          <h1>SM Content Studio</h1>
+          <p>Acceso privado para producción editorial de GPC, SM Soluciones y LEM.</p>
+          <label>Correo<input value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" /></label>
+          <label>Contraseña<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" /></label>
+          <button className="btn primary" onClick={signIn} disabled={busy}>{busy ? <Loader2 className="spin" /> : <Shield size={18} />} Entrar</button>
+          {notice && <p className="notice">{notice}</p>}
         </section>
       </main>
     );
@@ -388,452 +459,121 @@ export default function AgendaSMApp() {
   return (
     <main className="app">
       <aside className="sidebar">
-        <div className="brand">
-          <Image src="/logo-sm-soluciones.png" width={84} height={70} alt="SM Soluciones" />
-          <span>Agenda SM</span>
-        </div>
-        <Nav view={view} setView={setView} />
-        {activeUser.role === "admin" && (
-          <a className="btn primary" href="/admin/users">
-            <Shield size={16} /> Panel Admin
-          </a>
-        )}
-        <div className="card" style={{ marginTop: "auto" }}>
-          <strong>{activeUser.full_name}</strong>
-          <p className="muted">{activeUser.role}</p>
-          <button className="btn" onClick={async () => { const client = await getSupabaseBrowserClient(); await client?.auth.signOut(); setIsAuthenticated(false); }}>
-            <LogOut size={16} /> Cerrar sesion
-          </button>
-        </div>
+        <div className="brand"><div className="mark">SM</div><div><strong>Content Studio</strong><span>Producción editorial</span></div></div>
+        <nav className="nav">
+          {nav.map((item) => <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => setView(item.id)}><item.icon size={18} />{item.label}</button>)}
+        </nav>
+        <div className="userbox"><strong>{user.full_name}</strong><span>{user.role}</span><button onClick={signOut}><LogOut size={16} />Salir</button></div>
       </aside>
 
       <section className="main">
         <header className="topbar">
-          <div>
-            <h1>{titleFor(view)}</h1>
-            <p>Zona horaria America/Mexico_City. Google Calendar se usa solo como Free/Busy.</p>
-          </div>
-          <div className="toolbar">
-            <select value={memberFilter} onChange={(event) => setMemberFilter(event.target.value)}>
-              <option value="all">Todos los miembros</option>
-              {profiles.map((profile) => (
-                <option key={profile.id} value={profile.id}>
-                  {profile.full_name}
-                </option>
-              ))}
-            </select>
-            <button className="btn primary" onClick={() => openNew()}>
-              <Plus size={18} /> Nueva cita
-            </button>
-          </div>
+          <div><h1>{nav.find((item) => item.id === view)?.label}</h1><p>Flujo: marca, tema, red, material, generar, editar, aprobar y publicar.</p></div>
+          {notice && <button className="notice" onClick={() => setNotice("")}>{notice}</button>}
         </header>
 
-        {view === "dashboard" && <Dashboard dashboard={dashboard} openAppointment={(item) => { setSelected(item); setIsModalOpen(true); }} />}
-        {view === "calendar" && <CalendarView appointments={visibleAppointments} profiles={profiles} onSelect={(item) => { setSelected(item); setIsModalOpen(true); }} />}
-        {view === "agenda" && <AgendaList appointments={visibleAppointments} onSelect={(item) => { setSelected(item); setIsModalOpen(true); }} />}
-        {view === "availability" && (
-          <AvailabilityView
-            participantIds={availabilityParticipants}
-            setParticipantIds={setAvailabilityParticipants}
-            duration={duration}
-            setDuration={setDuration}
-            rangeStart={rangeStart}
-            setRangeStart={setRangeStart}
-            rangeEnd={rangeEnd}
-            setRangeEnd={setRangeEnd}
-            availability={availability}
-            profiles={profiles}
-            googleWarning={googleWarning}
-            testGoogleFreeBusy={testGoogleFreeBusy}
-            createFromSlot={openNew}
-          />
+        {view === "dashboard" && (
+          <div className="grid">
+            <section className="metrics">
+              <article><span>Borradores</span><strong>{stats.draft}</strong></article>
+              <article><span>En revisión</span><strong>{stats.review}</strong></article>
+              <article><span>Aprobados</span><strong>{stats.approved}</strong></article>
+              <article><span>Publicados</span><strong>{stats.published}</strong></article>
+            </section>
+            <Filters filters={filters} setFilters={setFilters} brands={brands} />
+            <ContentTable items={filteredItems} brands={brands} assets={assets} onSelect={(item) => { setSelected({ ...emptyContent, ...item, scheduled_at: toInputDate(item.scheduled_at), published_at: item.published_at }); setView("generator"); }} />
+          </div>
         )}
-        {view === "clients" && <ClientsView clients={clients} projects={projects} contacts={contacts} />}
-        {view === "notifications" && <NotificationsView />}
-        {view === "settings" && <SettingsView activeUser={activeUser} profiles={profiles} setActiveUser={setActiveUser} />}
+
+        {view === "generator" && (
+          <div className="workspace">
+            <section className="panel">
+              <h2>Generador de contenido</h2>
+              <label>Marca<select value={selected.brand_id} onChange={(e) => {
+                const brand = brands.find((item) => item.id === e.target.value);
+                setSelected({ ...emptyContent, brand_id: e.target.value, network: brand?.networks?.[0] || "instagram" });
+              }}>{brands.map((brand) => <option key={brand.id} value={brand.id}>{brand.name}</option>)}</select></label>
+              <label>Tema<textarea value={selected.topic} onChange={(e) => setSelected({ ...selected, topic: e.target.value })} /></label>
+              <label>Red social<select value={selected.network} onChange={(e) => setSelected({ ...selected, network: e.target.value as Network })}>{(selectedBrand?.networks || []).map((network) => <option key={network} value={network}>{networkLabels[network]}</option>)}</select></label>
+              <label>Material<select value={selected.asset_id || ""} onChange={(e) => setSelected({ ...selected, asset_id: e.target.value || null })}><option value="">Sin material</option>{brandAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.title}</option>)}</select></label>
+              <div className="actions">
+                <button className="btn" onClick={() => fileRef.current?.click()}><Upload size={18} />Subir material</button>
+                <button className="btn primary" onClick={generateContent}><Sparkles size={18} />Generar</button>
+              </div>
+              <input ref={fileRef} type="file" accept="image/*,video/*" hidden onChange={(e) => e.target.files?.[0] && uploadAsset(e.target.files[0])} />
+              <AssetPreview asset={assets.find((asset) => asset.id === selected.asset_id)} />
+            </section>
+
+            <section className="panel editor">
+              <div className="row"><h2>Editor manual</h2><StatusPill status={selected.status} /></div>
+              <label>Título<input value={selected.title} onChange={(e) => setSelected({ ...selected, title: e.target.value })} /></label>
+              <label>Descripción<textarea value={selected.description} onChange={(e) => setSelected({ ...selected, description: e.target.value })} /></label>
+              <CopyField label="Copy" value={selected.copy_text} setValue={(value) => setSelected({ ...selected, copy_text: value })} copy={copy} />
+              <CopyField label="Hashtags" value={selected.hashtags} setValue={(value) => setSelected({ ...selected, hashtags: value })} copy={copy} />
+              <CopyField label="CTA" value={selected.cta} setValue={(value) => setSelected({ ...selected, cta: value })} copy={copy} />
+              <CopyField label="Guion de video" value={selected.video_script} setValue={(value) => setSelected({ ...selected, video_script: value })} copy={copy} />
+              <CopyField label="Textos en pantalla" value={selected.on_screen_text} setValue={(value) => setSelected({ ...selected, on_screen_text: value })} copy={copy} />
+              <label>Programación interna<input type="datetime-local" value={selected.scheduled_at || ""} onChange={(e) => setSelected({ ...selected, scheduled_at: e.target.value })} /></label>
+              <MetricsEditor item={selected} setItem={setSelected} />
+              <div className="actions sticky-actions">
+                <button className="btn" onClick={() => saveContent("draft")} disabled={busy}><Save size={18} />Guardar</button>
+                <button className="btn" onClick={() => saveContent("review")} disabled={busy}><Edit3 size={18} />Revisión</button>
+                <button className="btn success" onClick={() => saveContent("approved")} disabled={busy}><Check size={18} />Aprobar</button>
+                <button className="btn dark" onClick={() => saveContent("published")} disabled={busy}><BarChart3 size={18} />Publicado</button>
+              </div>
+            </section>
+          </div>
+        )}
+
+        {view === "calendar" && <CalendarView items={filteredItems} brands={brands} onSelect={(item) => { setSelected({ ...emptyContent, ...item, scheduled_at: toInputDate(item.scheduled_at) }); setView("generator"); }} />}
+        {view === "library" && <LibraryView assets={assets} brands={brands} onUpload={() => fileRef.current?.click()} />}
+        {view === "brands" && <BrandsView brands={brands} prompts={prompts} brandDraft={brandDraft} setBrandDraft={setBrandDraft} saveBrand={saveBrand} promptDraft={promptDraft} setPromptDraft={setPromptDraft} savePrompt={savePrompt} />}
+        {view === "settings" && <SettingsView user={user} profiles={profiles} />}
       </section>
-
-      <nav className="mobile-nav">
-        {navItems.map((item) => {
-          const Icon = item.icon;
-          return (
-            <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => setView(item.id)}>
-              <Icon size={20} />
-              {item.label.replace("Buscar horario", "Horario")}
-            </button>
-          );
-        })}
-      </nav>
-
-      {isModalOpen && selected && (
-        <AppointmentModal
-          appointment={selected}
-          setAppointment={setSelected}
-          saveAppointment={saveAppointment}
-          changeStatus={changeStatus}
-          profiles={profiles}
-          clients={clients}
-          projects={projects}
-          contacts={contacts}
-          createMeet={createMeet}
-          setCreateMeet={setCreateMeet}
-          close={() => setIsModalOpen(false)}
-        />
-      )}
     </main>
   );
 }
 
-function Nav({ view, setView }: { view: View; setView: (view: View) => void }) {
-  return (
-    <nav className="nav">
-      {[...navItems.slice(0, 3), { id: "agenda" as View, label: "Mi agenda", icon: Clock }, { id: "notifications" as View, label: "Notificaciones", icon: Bell }, ...navItems.slice(3)].map((item) => {
-        const Icon = item.icon;
-        return (
-          <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => setView(item.id)}>
-            <Icon size={18} /> {item.label}
-          </button>
-        );
-      })}
-    </nav>
-  );
+function Filters({ filters, setFilters, brands }: { filters: any; setFilters: (value: any) => void; brands: Brand[] }) {
+  return <section className="filters"><Search size={18} /><input placeholder="Buscar contenido" value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} /><select value={filters.brand} onChange={(e) => setFilters({ ...filters, brand: e.target.value })}><option value="all">Todas las marcas</option>{brands.map((brand) => <option key={brand.id} value={brand.id}>{brand.name}</option>)}</select><select value={filters.network} onChange={(e) => setFilters({ ...filters, network: e.target.value })}><option value="all">Todas las redes</option>{Object.entries(networkLabels).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select><select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}><option value="all">Todos los estados</option>{Object.entries(statusLabels).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select><input type="date" value={filters.date} onChange={(e) => setFilters({ ...filters, date: e.target.value })} /><Filter size={18} /></section>;
 }
 
-function titleFor(view: View) {
-  return {
-    dashboard: "Dashboard",
-    calendar: "Calendario general",
-    agenda: "Mi agenda",
-    availability: "Buscar horario disponible",
-    clients: "Clientes y proyectos",
-    notifications: "Notificaciones",
-    settings: "Configuracion"
-  }[view];
+function ContentTable({ items, brands, assets, onSelect }: { items: ContentItem[]; brands: Brand[]; assets: Asset[]; onSelect: (item: ContentItem) => void }) {
+  return <section className="panel"><h2>Registro de contenido</h2><div className="table">{items.map((item) => <button key={item.id} className="table-row" onClick={() => onSelect(item)}><span><strong>{item.title || item.topic}</strong><small>{brands.find((brand) => brand.id === item.brand_id)?.name} · {networkLabels[item.network]}</small></span><span>{assets.find((asset) => asset.id === item.asset_id)?.asset_type === "video" ? <FileVideo size={18} /> : <ImageIcon size={18} />}</span><span>{formatDate(item.scheduled_at)}</span><StatusPill status={item.status} /></button>)}</div></section>;
 }
 
-function Dashboard({ dashboard, openAppointment }: { dashboard: { today: Appointment[]; upcoming: Appointment[]; pendingFollowups: Appointment[]; overdue: Appointment[] }; openAppointment: (item: Appointment) => void }) {
-  return (
-    <div className="grid">
-      <div className="grid cards">
-        <Metric label="Citas de hoy" value={dashboard.today.length} />
-        <Metric label="Proximas citas" value={dashboard.upcoming.length} />
-        <Metric label="Seguimientos" value={dashboard.pendingFollowups.length} />
-        <Metric label="Vencidas" value={dashboard.overdue.length} />
-      </div>
-      <div className="grid two">
-        <AppointmentList title="Hoy y proximas" appointments={[...dashboard.today, ...dashboard.upcoming]} onSelect={openAppointment} />
-        <AppointmentList title="Pendientes y vencidas" appointments={[...dashboard.pendingFollowups, ...dashboard.overdue]} onSelect={openAppointment} />
-      </div>
-    </div>
-  );
+function StatusPill({ status }: { status: PostStatus }) {
+  return <span className={`pill ${status}`}>{statusLabels[status]}</span>;
 }
 
-function Metric({ label, value }: { label: string; value: number }) {
-  return (
-    <article className="card metric">
-      <span className="muted">{label}</span>
-      <strong>{value}</strong>
-      <span className="badge">{value === 1 ? "registro" : "registros"}</span>
-    </article>
-  );
+function CopyField({ label, value, setValue, copy }: { label: string; value: string; setValue: (value: string) => void; copy: (value: string) => void }) {
+  return <label>{label}<div className="copy-field"><textarea value={value} onChange={(e) => setValue(e.target.value)} /><button type="button" onClick={() => copy(value)} title={`Copiar ${label}`}><Clipboard size={18} /></button></div></label>;
 }
 
-function CalendarView({ appointments, profiles, onSelect }: { appointments: Appointment[]; profiles: Profile[]; onSelect: (item: Appointment) => void }) {
-  return (
-    <section className="card">
-      <FullCalendar
-        plugins={[dayGridPlugin, timeGridPlugin, listPlugin, interactionPlugin]}
-        initialView="timeGridWeek"
-        headerToolbar={{ left: "prev,next today", center: "title", right: "dayGridMonth,timeGridWeek,timeGridDay,listWeek" }}
-        locale="es"
-        height="auto"
-        nowIndicator
-        editable={false}
-        selectable
-        events={appointments.map((item) => ({
-          id: item.id,
-          title: item.title,
-          start: item.start_at,
-          end: item.end_at,
-          backgroundColor: profiles.find((profile) => profile.id === item.responsible_user_id)?.color || "#104080",
-          borderColor: "transparent"
-        }))}
-        eventClick={(info) => {
-          const item = appointments.find((appointment) => appointment.id === info.event.id);
-          if (item) onSelect(item);
-        }}
-      />
-    </section>
-  );
+function AssetPreview({ asset }: { asset?: Asset }) {
+  if (!asset) return <div className="preview empty">Sin material seleccionado</div>;
+  return <div className="preview">{asset.asset_type === "video" ? <video src={asset.public_url} controls /> : <img src={asset.public_url} alt={asset.title} />}<a className="btn" href={asset.public_url} download={asset.file_name}><Download size={18} />Descargar</a></div>;
 }
 
-function AgendaList({ appointments, onSelect }: { appointments: Appointment[]; onSelect: (item: Appointment) => void }) {
-  return <AppointmentList title="Citas visibles" appointments={appointments} onSelect={onSelect} />;
+function MetricsEditor({ item, setItem }: { item: ContentItem; setItem: (item: ContentItem) => void }) {
+  const keys = ["impressions", "reach", "clicks", "likes", "comments", "shares"];
+  return <div className="metric-grid">{keys.map((key) => <label key={key}>{key}<input type="number" min="0" value={item.manual_metrics?.[key] || 0} onChange={(e) => setItem({ ...item, manual_metrics: { ...item.manual_metrics, [key]: Number(e.target.value) } })} /></label>)}</div>;
 }
 
-function AppointmentList({ title, appointments, onSelect }: { title: string; appointments: Appointment[]; onSelect: (item: Appointment) => void }) {
-  return (
-    <section className="card">
-      <div className="section-title">
-        <h2>{title}</h2>
-        <span className="badge">{appointments.length}</span>
-      </div>
-      <div className="list">
-        {appointments.length === 0 && <p className="muted">No hay citas para mostrar.</p>}
-        {appointments.map((appointment) => (
-          <button className="item" key={appointment.id} onClick={() => onSelect(appointment)}>
-            <h3>{appointment.title}</h3>
-            <p className="muted">{fmtDateTime(appointment.start_at)} - {fmtDateTime(appointment.end_at)}</p>
-            <span className={`badge ${appointment.status}`}>{appointment.status}</span>
-          </button>
-        ))}
-      </div>
-    </section>
-  );
+function CalendarView({ items, brands, onSelect }: { items: ContentItem[]; brands: Brand[]; onSelect: (item: ContentItem) => void }) {
+  const scheduled = items.filter((item) => item.scheduled_at);
+  return <section className="panel"><h2>Calendario editorial</h2><div className="calendar-list">{scheduled.map((item) => <button key={item.id} onClick={() => onSelect(item)}><CalendarDays size={18} /><span><strong>{formatDate(item.scheduled_at)}</strong>{item.topic} · {brands.find((brand) => brand.id === item.brand_id)?.name} · {networkLabels[item.network]}</span><StatusPill status={item.status} /></button>)}</div></section>;
 }
 
-function AvailabilityView(props: {
-  participantIds: string[];
-  setParticipantIds: (ids: string[]) => void;
-  duration: number;
-  setDuration: (value: number) => void;
-  rangeStart: string;
-  setRangeStart: (value: string) => void;
-  rangeEnd: string;
-  setRangeEnd: (value: string) => void;
-  availability: AvailabilitySlot[];
-  profiles: Profile[];
-  googleWarning: string;
-  testGoogleFreeBusy: () => void;
-  createFromSlot: (slot: AvailabilitySlot) => void;
-}) {
-  const best = props.availability.find((slot) => slot.result === "Disponible");
-  return (
-    <div className="grid">
-      <section className="card">
-        <div className="form-grid">
-          <div className="field">
-            <label>Participantes internos</label>
-            <select multiple value={props.participantIds} onChange={(event) => props.setParticipantIds(Array.from(event.target.selectedOptions).map((option) => option.value))}>
-              {props.profiles.filter((profile) => profile.active).map((profile) => (
-                <option key={profile.id} value={profile.id}>{profile.full_name}</option>
-              ))}
-            </select>
-          </div>
-          <div className="field">
-            <label>Duracion</label>
-            <select value={props.duration} onChange={(event) => props.setDuration(Number(event.target.value))}>
-              {[15, 30, 45, 60, 90, 120].map((value) => <option key={value} value={value}>{value} min</option>)}
-            </select>
-          </div>
-          <div className="field">
-            <label>Desde</label>
-            <input type="datetime-local" value={props.rangeStart} onChange={(event) => props.setRangeStart(event.target.value)} />
-          </div>
-          <div className="field">
-            <label>Hasta</label>
-            <input type="datetime-local" value={props.rangeEnd} onChange={(event) => props.setRangeEnd(event.target.value)} />
-          </div>
-        </div>
-        <div className="toolbar" style={{ marginTop: 14 }}>
-          <button className="btn" onClick={props.testGoogleFreeBusy}>Probar Free/Busy</button>
-          {props.googleWarning && <span className="badge">{props.googleWarning}</span>}
-        </div>
-      </section>
-
-      <div className="grid cards">
-        <article className="card metric">
-          <span className="muted">Mejor horario</span>
-          <strong style={{ fontSize: 18 }}>{best ? fmtDateTime(best.start) : "Sin opcion"}</strong>
-        </article>
-        <Metric label="Alternativas" value={props.availability.filter((slot) => slot.result === "Disponible").length} />
-        <Metric label="Conflictos" value={props.availability.filter((slot) => slot.result === "No disponible").length} />
-        <article className="card metric">
-          <span className="muted">Fuente</span>
-          <strong style={{ fontSize: 18 }}>Agenda SM + Free/Busy</strong>
-        </article>
-      </div>
-
-      <section className="card table-scroll">
-        <table className="availability-table">
-          <thead>
-            <tr>
-              <th>Hora</th>
-              {props.participantIds.map((id) => <th key={id}>{props.profiles.find((profile) => profile.id === id)?.full_name}</th>)}
-              <th>Resultado</th>
-              <th>Accion</th>
-            </tr>
-          </thead>
-          <tbody>
-            {props.availability.map((slot) => (
-              <tr key={`${slot.start}-${slot.end}`}>
-                <td>{fmtDateTime(slot.start)}</td>
-                {props.participantIds.map((id) => <td key={id}>{slot.participants[id]}</td>)}
-                <td><span className={`badge ${slot.result.replace(" ", "-")}`}>{slot.result}</span></td>
-                <td><button className="btn" disabled={slot.result !== "Disponible"} onClick={() => props.createFromSlot(slot)}>Crear cita</button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
-    </div>
-  );
+function LibraryView({ assets, brands, onUpload }: { assets: Asset[]; brands: Brand[]; onUpload: () => void }) {
+  return <section className="panel"><div className="row"><h2>Biblioteca de imágenes y videos</h2><button className="btn primary" onClick={onUpload}><Upload size={18} />Subir</button></div><div className="asset-grid">{assets.map((asset) => <article key={asset.id}><AssetPreview asset={asset} /><strong>{asset.title}</strong><small>{brands.find((brand) => brand.id === asset.brand_id)?.name} · {(asset.file_size / 1024 / 1024).toFixed(2)} MB</small></article>)}</div></section>;
 }
 
-function ClientsView({ clients, projects, contacts }: { clients: Client[]; projects: Project[]; contacts: Contact[] }) {
-  return (
-    <div className="grid two">
-      <EntityList title="Clientes" rows={clients.length ? clients.map((item) => `${item.name} - ${item.status}`) : ["Sin clientes registrados"]} />
-      <EntityList title="Proyectos y contactos" rows={projects.length || contacts.length ? [...projects.map((item) => item.name), ...contacts.map((item) => `${item.name} / ${item.email || "sin email"}`)] : ["Sin proyectos ni contactos registrados"]} />
-    </div>
-  );
+function BrandsView(props: { brands: Brand[]; prompts: MasterPrompt[]; brandDraft: Partial<Brand>; setBrandDraft: (value: Partial<Brand>) => void; saveBrand: () => void; promptDraft: Partial<MasterPrompt>; setPromptDraft: (value: Partial<MasterPrompt>) => void; savePrompt: () => void }) {
+  const { brands, prompts, brandDraft, setBrandDraft, saveBrand, promptDraft, setPromptDraft, savePrompt } = props;
+  return <div className="workspace"><section className="panel"><h2>Gestión de marcas</h2>{brands.map((brand) => <button key={brand.id} className="brand-card" onClick={() => setBrandDraft(brand)}><strong>{brand.name}</strong><span>{brand.networks.map((n) => networkLabels[n]).join(", ")}</span><small>{brand.editorial_profile}</small></button>)}<label>Nombre<input value={brandDraft.name || ""} onChange={(e) => setBrandDraft({ ...brandDraft, name: e.target.value })} /></label><label>Slug<input value={brandDraft.slug || ""} onChange={(e) => setBrandDraft({ ...brandDraft, slug: e.target.value })} /></label><label>Redes<select multiple value={brandDraft.networks || []} onChange={(e) => setBrandDraft({ ...brandDraft, networks: Array.from(e.target.selectedOptions).map((option) => option.value as Network) })}>{Object.entries(networkLabels).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label><label>Perfil editorial<textarea value={brandDraft.editorial_profile || ""} onChange={(e) => setBrandDraft({ ...brandDraft, editorial_profile: e.target.value })} /></label><label>Tono de voz<textarea value={brandDraft.voice_tone || ""} onChange={(e) => setBrandDraft({ ...brandDraft, voice_tone: e.target.value })} /></label><label>Audiencia<textarea value={brandDraft.audience || ""} onChange={(e) => setBrandDraft({ ...brandDraft, audience: e.target.value })} /></label><label>CTA base<textarea value={brandDraft.cta_style || ""} onChange={(e) => setBrandDraft({ ...brandDraft, cta_style: e.target.value })} /></label><button className="btn primary" onClick={saveBrand}><Save size={18} />Guardar marca</button></section><section className="panel"><h2>Prompts maestros</h2>{prompts.map((prompt) => <button key={prompt.id} className="brand-card" onClick={() => setPromptDraft(prompt)}><strong>{prompt.title}</strong><span>{brands.find((brand) => brand.id === prompt.brand_id)?.name} · {networkLabels[prompt.network]}</span></button>)}<label>Marca<select value={promptDraft.brand_id || ""} onChange={(e) => setPromptDraft({ ...promptDraft, brand_id: e.target.value })}><option value="">Elegir marca</option>{brands.map((brand) => <option key={brand.id} value={brand.id}>{brand.name}</option>)}</select></label><label>Red<select value={promptDraft.network || "instagram"} onChange={(e) => setPromptDraft({ ...promptDraft, network: e.target.value as Network })}>{Object.entries(networkLabels).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label><label>Título<input value={promptDraft.title || ""} onChange={(e) => setPromptDraft({ ...promptDraft, title: e.target.value })} /></label><label>Prompt<textarea value={promptDraft.prompt || ""} onChange={(e) => setPromptDraft({ ...promptDraft, prompt: e.target.value })} /></label><button className="btn primary" onClick={savePrompt}><Save size={18} />Guardar prompt</button></section></div>;
 }
 
-function EntityList({ title, rows }: { title: string; rows: string[] }) {
-  return (
-    <section className="card">
-      <div className="section-title"><h2>{title}</h2><button className="btn"><Plus size={16} /> Nuevo</button></div>
-      <div className="list">{rows.map((row) => <div className="item" key={row}>{row}</div>)}</div>
-    </section>
-  );
-}
-
-function NotificationsView() {
-  return (
-    <section className="card">
-      <div className="section-title"><h2>Panel de notificaciones</h2><span className="badge">{demoNotifications.length}</span></div>
-      <div className="list">
-        {demoNotifications.map((item) => (
-          <div className="item" key={item.id}>
-            <h3>{item.title}</h3>
-            <p className="muted">{item.message}</p>
-            <span className="badge">{item.channel}</span>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function SettingsView({ activeUser, profiles, setActiveUser }: { activeUser: Profile; profiles: Profile[]; setActiveUser: (profile: Profile) => void }) {
-  const [googleConnected, setGoogleConnected] = useState(false);
-  const [googleMessage, setGoogleMessage] = useState("");
-
-  useEffect(() => {
-    const loadStatus = async () => {
-      const client = await getSupabaseBrowserClient();
-      if (!client) return;
-      const { data } = await client.auth.getSession();
-      const token = data.session?.access_token;
-      if (!token) return;
-      const response = await fetch("/api/google/status", { headers: { Authorization: `Bearer ${token}` } });
-      const status = await response.json();
-      setGoogleConnected(Boolean(status.connected));
-    };
-    loadStatus();
-  }, []);
-
-  const connectGoogle = async () => {
-    setGoogleMessage("");
-    const client = await getSupabaseBrowserClient();
-    if (!client) {
-      setGoogleMessage("Supabase no configurado.");
-      return;
-    }
-    const { data } = await client.auth.getSession();
-    const token = data.session?.access_token;
-    if (!token) {
-      setGoogleMessage("Sesion requerida.");
-      return;
-    }
-    const response = await fetch("/api/google/connect", { headers: { Authorization: `Bearer ${token}` } });
-    const payload = await response.json();
-    if (!response.ok) {
-      setGoogleMessage(payload.error || "Google Calendar no configurado.");
-      return;
-    }
-    window.location.href = payload.authUrl;
-  };
-
-  return (
-    <div className="grid two">
-      <section className="card">
-        <div className="section-title"><h2>Miembros y roles</h2></div>
-        <div className="list">
-          {profiles.map((profile) => (
-            <button className="item" key={profile.id} onClick={() => setActiveUser(profile)}>
-              <h3>{profile.full_name}</h3>
-              <p className="muted">{profile.primary_email}</p>
-              <span className="badge">{profile.role}</span>
-            </button>
-          ))}
-        </div>
-      </section>
-      <section className="card">
-        <div className="section-title"><h2>Preferencias</h2></div>
-        <div className="form-grid">
-          <div className="field"><label>Usuario activo</label><input value={activeUser.full_name} readOnly /></div>
-          <div className="field"><label>Rol</label><input value={activeUser.role} readOnly /></div>
-          <div className="field"><label>Horario laboral</label><input value="09:00 - 18:00" readOnly /></div>
-          <div className="field"><label>Correo secundario</label><input placeholder="correo@empresa.com" /></div>
-          <label><input type="checkbox" defaultChecked /> Notificaciones in-app</label>
-          <label><input type="checkbox" defaultChecked /> Email con Resend</label>
-          <label><input type="checkbox" /> WhatsApp preparado para futuro</label>
-          <label><input type="checkbox" checked={googleConnected} readOnly /> Google Calendar Free/Busy activo</label>
-          <button className="btn primary" onClick={connectGoogle}>Conectar Google Calendar</button>
-          {googleMessage && <p className="muted">{googleMessage}</p>}
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function AppointmentModal({ appointment, setAppointment, saveAppointment, changeStatus, profiles, clients, projects, contacts, createMeet, setCreateMeet, close }: {
-  appointment: Appointment;
-  setAppointment: (appointment: Appointment) => void;
-  saveAppointment: (appointment: Appointment) => void;
-  changeStatus: (appointment: Appointment, status: AppointmentStatus) => void;
-  profiles: Profile[];
-  clients: Client[];
-  projects: Project[];
-  contacts: Contact[];
-  createMeet: boolean;
-  setCreateMeet: (value: boolean) => void;
-  close: () => void;
-}) {
-  const update = <K extends keyof Appointment>(key: K, value: Appointment[K]) => setAppointment({ ...appointment, [key]: value });
-
-  return (
-    <div className="modal-backdrop">
-      <section className="modal">
-        <div className="section-title">
-          <h2>{appointment.title || "Nueva cita"}</h2>
-          <button className="btn" onClick={close}>Cerrar</button>
-        </div>
-        <div className="form-grid">
-          <div className="field full"><label>Titulo</label><input value={appointment.title} onChange={(event) => update("title", event.target.value)} /></div>
-          <div className="field"><label>Cliente</label><select value={appointment.client_id || ""} onChange={(event) => update("client_id", event.target.value || null)}><option value="">Sin cliente</option>{clients.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
-          <div className="field"><label>Proyecto</label><select value={appointment.project_id || ""} onChange={(event) => update("project_id", event.target.value || null)}><option value="">Sin proyecto</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
-          <div className="field"><label>Contacto</label><select value={appointment.contact_id || ""} onChange={(event) => update("contact_id", event.target.value || null)}><option value="">Sin contacto</option>{contacts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
-          <div className="field"><label>Responsable</label><select value={appointment.responsible_user_id} onChange={(event) => update("responsible_user_id", event.target.value)}>{profiles.map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}</select></div>
-          <div className="field"><label>Inicio</label><input type="datetime-local" value={toInputDateTime(appointment.start_at)} onChange={(event) => update("start_at", new Date(event.target.value).toISOString())} /></div>
-          <div className="field"><label>Fin</label><input type="datetime-local" value={toInputDateTime(appointment.end_at)} onChange={(event) => update("end_at", new Date(event.target.value).toISOString())} /></div>
-          <div className="field"><label>Tipo</label><select value={appointment.type} onChange={(event) => update("type", event.target.value as AppointmentType)}>{["llamada", "junta", "visita", "seguimiento", "entrega", "cobranza", "otro"].map((item) => <option key={item}>{item}</option>)}</select></div>
-          <div className="field"><label>Modalidad</label><select value={appointment.modality} onChange={(event) => update("modality", event.target.value as AppointmentModality)}>{["presencial", "llamada", "videollamada"].map((item) => <option key={item}>{item}</option>)}</select></div>
-          <div className="field"><label>Estatus</label><select value={appointment.status} onChange={(event) => update("status", event.target.value as AppointmentStatus)}>{["pendiente", "confirmada", "realizada", "cancelada", "reagendada"].map((item) => <option key={item}>{item}</option>)}</select></div>
-          <div className="field"><label>Lugar o link</label><input value={appointment.location_or_link || ""} onChange={(event) => update("location_or_link", event.target.value)} /></div>
-          <label><input type="checkbox" checked={createMeet} onChange={(event) => setCreateMeet(event.target.checked)} /> Crear Google Meet</label>
-          <div className="field full"><label>Participantes internos</label><select multiple value={appointment.participant_ids} onChange={(event) => update("participant_ids", Array.from(event.target.selectedOptions).map((option) => option.value))}>{profiles.map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}</select></div>
-          <div className="field full"><label>Notas internas</label><textarea value={appointment.notes || ""} onChange={(event) => update("notes", event.target.value)} /></div>
-          <div className="field"><label>Siguiente accion</label><input value={appointment.next_action || ""} onChange={(event) => update("next_action", event.target.value)} /></div>
-          <div className="field"><label>Fecha siguiente accion</label><input type="datetime-local" value={appointment.next_action_due_at ? toInputDateTime(appointment.next_action_due_at) : ""} onChange={(event) => update("next_action_due_at", event.target.value ? new Date(event.target.value).toISOString() : "")} /></div>
-        </div>
-        <div className="toolbar" style={{ marginTop: 16 }}>
-          <button className="btn primary" onClick={() => saveAppointment(appointment)}><CheckCircle2 size={18} /> Guardar</button>
-          <button className="btn success" onClick={() => changeStatus(appointment, "realizada")}>Completar</button>
-          <button className="btn danger" onClick={() => changeStatus(appointment, "cancelada")}><XCircle size={18} /> Cancelar cita</button>
-        </div>
-      </section>
-    </div>
-  );
+function SettingsView({ user, profiles }: { user: Profile; profiles: Profile[] }) {
+  return <section className="panel"><h2>Configuración general</h2><div className="settings-grid"><article><Shield size={22} /><strong>Seguridad</strong><p>Supabase Auth, RLS por usuario activo y políticas por rol.</p></article><article><Users size={22} /><strong>Usuarios</strong><p>{profiles.length} perfiles registrados. Tu rol: {user.role}.</p></article><article><Library size={22} /><strong>Storage</strong><p>Bucket privado content-media con URLs firmadas, imágenes hasta 10 MB y videos hasta 80 MB.</p></article><article><Sparkles size={22} /><strong>APIs futuras</strong><p>La tabla social_connections queda lista para Meta, LinkedIn, TikTok y programadores externos.</p></article></div></section>;
 }

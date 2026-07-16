@@ -21,7 +21,7 @@ export default function ResetPasswordPage() {
     }
 
     const { error } = await client.auth.updateUser({ password });
-    setMessage(error ? error.message : "Contrasena actualizada. Ya puedes entrar a Agenda SM.");
+    setMessage(error ? error.message : "Contrasena actualizada. Ya puedes entrar a SM Content Studio.");
   };
 
   return (

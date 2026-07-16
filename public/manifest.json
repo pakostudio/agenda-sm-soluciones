@@ -1,17 +1,16 @@
 {
-  "name": "Agenda SM",
-  "short_name": "Agenda SM",
-  "description": "Agenda privada de SM Soluciones para citas, disponibilidad y seguimiento.",
+  "name": "SM Content Studio",
+  "short_name": "SM Studio",
+  "description": "Estudio privado para producir contenido de GPC, SM Soluciones y LEM.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#F7FAFC",
-  "theme_color": "#104080",
+  "background_color": "#fbfcfb",
+  "theme_color": "#202733",
   "icons": [
     {
       "src": "/logo-sm-soluciones.png",
       "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any"
+      "type": "image/png"
     }
   ]
 }
