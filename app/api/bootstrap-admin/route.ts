@@ -38,12 +38,24 @@ export async function POST(request: NextRequest) {
       user_metadata: { full_name: fullName }
     });
 
-    if (created.error || !created.data.user) {
-      return NextResponse.json({ error: created.error?.message || "No fue posible crear el admin." }, { status: 400 });
+    let userId = created.data.user?.id;
+    if (created.error || !userId) {
+      if (!created.error?.message?.toLowerCase().includes("already")) {
+        return NextResponse.json({ error: created.error?.message || "No fue posible crear el admin." }, { status: 400 });
+      }
+      const listed = await admin.auth.admin.listUsers();
+      const existing = listed.data.users.find((user) => user.email?.toLowerCase() === email);
+      if (!existing) return NextResponse.json({ error: "El usuario ya existe, pero no fue posible localizarlo." }, { status: 400 });
+      userId = existing.id;
+      await admin.auth.admin.updateUserById(userId, {
+        password,
+        email_confirm: true,
+        user_metadata: { full_name: fullName }
+      });
     }
 
     const profile = await admin.from("profiles").upsert({
-      id: created.data.user.id,
+      id: userId,
       full_name: fullName,
       email,
       role: "admin",
@@ -51,7 +63,7 @@ export async function POST(request: NextRequest) {
     });
 
     if (profile.error) return NextResponse.json({ error: profile.error.message }, { status: 400 });
-    return NextResponse.json({ ok: true, id: created.data.user.id });
+    return NextResponse.json({ ok: true, id: userId });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unexpected error." }, { status: 500 });
   }
