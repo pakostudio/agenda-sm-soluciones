@@ -40,6 +40,15 @@ type Profile = {
   active: boolean;
 };
 
+type UserDraft = {
+  id?: string;
+  full_name: string;
+  email: string;
+  role: Role;
+  active: boolean;
+  password: string;
+};
+
 type Brand = {
   id: string;
   name: string;
@@ -197,6 +206,7 @@ export default function SMContentStudio() {
   const [filters, setFilters] = useState({ q: "", brand: "all", network: "all", status: "all", date: "" });
   const [brandDraft, setBrandDraft] = useState<Partial<Brand>>({});
   const [promptDraft, setPromptDraft] = useState<Partial<MasterPrompt>>({});
+  const [userDraft, setUserDraft] = useState<UserDraft>({ full_name: "", email: "", role: "editor", active: true, password: "" });
 
   const clientReady = isSupabaseConfigured;
   const selectedBrand = brands.find((brand) => brand.id === selected.brand_id) || brands[0];
@@ -424,6 +434,30 @@ export default function SMContentStudio() {
     setNotice("Texto copiado.");
   };
 
+  const saveUser = async () => {
+    const client = await getSupabaseBrowserClient();
+    if (!client || user?.role !== "admin") return setNotice("Solo admin puede gestionar usuarios.");
+    if (!userDraft.full_name.trim() || !userDraft.email.trim()) return setNotice("Nombre y correo son obligatorios.");
+    if (!userDraft.id && userDraft.password.length < 8) return setNotice("La contraseña temporal debe tener al menos 8 caracteres.");
+    setBusy(true);
+    const session = await client.auth.getSession();
+    const response = await fetch(userDraft.id ? `/api/users/${userDraft.id}` : "/api/users", {
+      method: userDraft.id ? "PATCH" : "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.data.session?.access_token || ""}`
+      },
+      body: JSON.stringify(userDraft)
+    });
+    const result = await response.json();
+    setNotice(response.ok ? "Usuario guardado." : result.error || "No fue posible guardar el usuario.");
+    if (response.ok) {
+      setUserDraft({ full_name: "", email: "", role: "editor", active: true, password: "" });
+      await loadData();
+    }
+    setBusy(false);
+  };
+
   if (!clientReady) {
     return (
       <main className="login-page">
@@ -528,7 +562,7 @@ export default function SMContentStudio() {
         {view === "calendar" && <CalendarView items={filteredItems} brands={brands} onSelect={(item) => { setSelected({ ...emptyContent, ...item, scheduled_at: toInputDate(item.scheduled_at) }); setView("generator"); }} />}
         {view === "library" && <LibraryView assets={assets} brands={brands} onUpload={() => fileRef.current?.click()} />}
         {view === "brands" && <BrandsView brands={brands} prompts={prompts} brandDraft={brandDraft} setBrandDraft={setBrandDraft} saveBrand={saveBrand} promptDraft={promptDraft} setPromptDraft={setPromptDraft} savePrompt={savePrompt} />}
-        {view === "settings" && <SettingsView user={user} profiles={profiles} />}
+        {view === "settings" && <SettingsView user={user} profiles={profiles} userDraft={userDraft} setUserDraft={setUserDraft} saveUser={saveUser} busy={busy} />}
       </section>
     </main>
   );
@@ -574,6 +608,7 @@ function BrandsView(props: { brands: Brand[]; prompts: MasterPrompt[]; brandDraf
   return <div className="workspace"><section className="panel"><h2>Gestión de marcas</h2>{brands.map((brand) => <button key={brand.id} className="brand-card" onClick={() => setBrandDraft(brand)}><strong>{brand.name}</strong><span>{brand.networks.map((n) => networkLabels[n]).join(", ")}</span><small>{brand.editorial_profile}</small></button>)}<label>Nombre<input value={brandDraft.name || ""} onChange={(e) => setBrandDraft({ ...brandDraft, name: e.target.value })} /></label><label>Slug<input value={brandDraft.slug || ""} onChange={(e) => setBrandDraft({ ...brandDraft, slug: e.target.value })} /></label><label>Redes<select multiple value={brandDraft.networks || []} onChange={(e) => setBrandDraft({ ...brandDraft, networks: Array.from(e.target.selectedOptions).map((option) => option.value as Network) })}>{Object.entries(networkLabels).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label><label>Perfil editorial<textarea value={brandDraft.editorial_profile || ""} onChange={(e) => setBrandDraft({ ...brandDraft, editorial_profile: e.target.value })} /></label><label>Tono de voz<textarea value={brandDraft.voice_tone || ""} onChange={(e) => setBrandDraft({ ...brandDraft, voice_tone: e.target.value })} /></label><label>Audiencia<textarea value={brandDraft.audience || ""} onChange={(e) => setBrandDraft({ ...brandDraft, audience: e.target.value })} /></label><label>CTA base<textarea value={brandDraft.cta_style || ""} onChange={(e) => setBrandDraft({ ...brandDraft, cta_style: e.target.value })} /></label><button className="btn primary" onClick={saveBrand}><Save size={18} />Guardar marca</button></section><section className="panel"><h2>Prompts maestros</h2>{prompts.map((prompt) => <button key={prompt.id} className="brand-card" onClick={() => setPromptDraft(prompt)}><strong>{prompt.title}</strong><span>{brands.find((brand) => brand.id === prompt.brand_id)?.name} · {networkLabels[prompt.network]}</span></button>)}<label>Marca<select value={promptDraft.brand_id || ""} onChange={(e) => setPromptDraft({ ...promptDraft, brand_id: e.target.value })}><option value="">Elegir marca</option>{brands.map((brand) => <option key={brand.id} value={brand.id}>{brand.name}</option>)}</select></label><label>Red<select value={promptDraft.network || "instagram"} onChange={(e) => setPromptDraft({ ...promptDraft, network: e.target.value as Network })}>{Object.entries(networkLabels).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label><label>Título<input value={promptDraft.title || ""} onChange={(e) => setPromptDraft({ ...promptDraft, title: e.target.value })} /></label><label>Prompt<textarea value={promptDraft.prompt || ""} onChange={(e) => setPromptDraft({ ...promptDraft, prompt: e.target.value })} /></label><button className="btn primary" onClick={savePrompt}><Save size={18} />Guardar prompt</button></section></div>;
 }
 
-function SettingsView({ user, profiles }: { user: Profile; profiles: Profile[] }) {
-  return <section className="panel"><h2>Configuración general</h2><div className="settings-grid"><article><Shield size={22} /><strong>Seguridad</strong><p>Supabase Auth, RLS por usuario activo y políticas por rol.</p></article><article><Users size={22} /><strong>Usuarios</strong><p>{profiles.length} perfiles registrados. Tu rol: {user.role}.</p></article><article><Library size={22} /><strong>Storage</strong><p>Bucket privado content-media con URLs firmadas, imágenes hasta 10 MB y videos hasta 80 MB.</p></article><article><Sparkles size={22} /><strong>APIs futuras</strong><p>La tabla social_connections queda lista para Meta, LinkedIn, TikTok y programadores externos.</p></article></div></section>;
+function SettingsView(props: { user: Profile; profiles: Profile[]; userDraft: UserDraft; setUserDraft: (value: UserDraft) => void; saveUser: () => void; busy: boolean }) {
+  const { user, profiles, userDraft, setUserDraft, saveUser, busy } = props;
+  return <div className="workspace"><section className="panel"><h2>Configuración general</h2><div className="settings-grid"><article><Shield size={22} /><strong>Seguridad</strong><p>Supabase Auth, RLS por usuario activo y políticas por rol.</p></article><article><Users size={22} /><strong>Usuarios</strong><p>{profiles.length} perfiles registrados. Tu rol: {user.role}.</p></article><article><Library size={22} /><strong>Storage</strong><p>Bucket privado content-media con URLs firmadas, imágenes hasta 10 MB y videos hasta 80 MB.</p></article><article><Sparkles size={22} /><strong>APIs futuras</strong><p>La tabla social_connections queda lista para Meta, LinkedIn, TikTok y programadores externos.</p></article></div></section><section className="panel"><h2>Usuarios y roles</h2>{profiles.map((profile) => <button key={profile.id} className="brand-card" onClick={() => setUserDraft({ id: profile.id, full_name: profile.full_name, email: profile.email, role: profile.role, active: profile.active, password: "" })}><strong>{profile.full_name}</strong><span>{profile.email} · {profile.role} · {profile.active ? "activo" : "inactivo"}</span></button>)}{user.role === "admin" && <><label>Nombre<input value={userDraft.full_name} onChange={(e) => setUserDraft({ ...userDraft, full_name: e.target.value })} /></label><label>Correo<input type="email" value={userDraft.email} onChange={(e) => setUserDraft({ ...userDraft, email: e.target.value })} /></label><label>Rol<select value={userDraft.role} onChange={(e) => setUserDraft({ ...userDraft, role: e.target.value as Role })}><option value="admin">Admin</option><option value="editor">Editor</option><option value="viewer">Viewer</option></select></label><label>Contraseña temporal<input type="password" value={userDraft.password} onChange={(e) => setUserDraft({ ...userDraft, password: e.target.value })} placeholder={userDraft.id ? "Opcional para reemplazar" : "Mínimo 8 caracteres"} /></label><label className="check"><input type="checkbox" checked={userDraft.active} onChange={(e) => setUserDraft({ ...userDraft, active: e.target.checked })} /> Usuario activo</label><div className="actions"><button className="btn primary" onClick={saveUser} disabled={busy}><Save size={18} />Guardar usuario</button><button className="btn" onClick={() => setUserDraft({ full_name: "", email: "", role: "editor", active: true, password: "" })}>Nuevo</button></div></>}</section></div>;
 }
