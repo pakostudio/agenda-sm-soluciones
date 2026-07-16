@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "bootstrap-admin": "node scripts/bootstrap-admin.mjs",
     "verify-production": "node scripts/verify-production.mjs",
-    "vercel-env": "node scripts/add-vercel-env.mjs"
+    "vercel-env": "node scripts/add-vercel-env.mjs",
+    "setup-supabase": "node scripts/setup-supabase.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.50.3",

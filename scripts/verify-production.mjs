@@ -12,7 +12,7 @@ if (!publicConfig.supabase?.configured) {
 const setupStatus = await fetch(`${base}/api/setup-status`).then((res) => res.json());
 if (!setupStatus.ok) {
   console.error(JSON.stringify(setupStatus.checks, null, 2));
-  throw new Error("Production setup checks failed.");
+  throw new Error("Production setup checks failed. Configure missing Vercel variables and apply Supabase SQL before retrying.");
 }
 
 if (!email || !password) {

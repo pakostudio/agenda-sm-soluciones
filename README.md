@@ -66,6 +66,12 @@ https://agenda-sm-soluciones-github.vercel.app/api/oauth/tiktok/callback
 5. Crea el primer admin con `scripts/bootstrap-admin.mjs`.
 6. Desde la app, entra a Ajustes > Usuarios para crear editores y viewers.
 
+También puedes aplicar schema y seed con conexión Postgres:
+
+```bash
+DATABASE_URL="postgresql://..." pnpm setup-supabase
+```
+
 El bucket `content-media` se crea desde la migración con políticas privadas y URLs firmadas.
 
 ## Producción en Vercel
